@@ -1,0 +1,41 @@
+erDiagram
+    RESEARCHERS ||--o{ GENETIC_PAYLOADS : creates
+    RESEARCHERS ||--o{ SYNTHESIS_JOBS : submits
+    GENETIC_PAYLOADS ||--o{ SYNTHESIS_JOBS : referenced_in
+    GENETIC_PAYLOADS ||--o{ SAFETY_SIMULATIONS : evaluated_by
+
+    RESEARCHERS {
+        int id PK
+        string name
+        string email UK
+        int bsl_clearance "BSL Level (1 to 4)"
+        string department
+        timestamp created_at
+    }
+
+    GENETIC_PAYLOADS {
+        int id PK
+        string name
+        string sequence "Validated ATCG string"
+        int risk_tier "Risk Tier (1 to 4)"
+        int created_by FK
+        timestamp created_at
+    }
+
+    SYNTHESIS_JOBS {
+        int id PK
+        int researcher_id FK
+        int payload_id FK
+        string status "PENDING, APPROVED, REJECTED, PROCESSING, COMPLETED, FAILED"
+        string rejection_reason
+        timestamp submitted_at
+    }
+
+    SAFETY_SIMULATIONS {
+        int id PK
+        int payload_id FK
+        float off_target_score
+        string status "RUNNING, PASSED, WARNING, FAILED"
+        string details
+        timestamp ran_at
+    }
