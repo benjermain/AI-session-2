@@ -55,4 +55,23 @@ async def simulate_off_target_effects(
     )
 
 if __name__ == "__main__":
-    mcp.run()
+    import argparse
+    parser = argparse.ArgumentParser(description="Vellora Bio MCP Server")
+    parser.add_argument(
+        "--transport",
+        choices=["stdio", "sse"],
+        default="stdio",
+        help="Transport mode to run the server (stdio for local process, sse for Streamable HTTP remote service)"
+    )
+    parser.add_argument("--port", type=int, default=8000, help="Port to use when running in sse mode")
+    parser.add_argument("--host", type=str, default="127.0.0.1", help="Host address when running in sse mode")
+    args = parser.parse_args()
+
+    if args.transport == "sse":
+        print(f"Starting Vellora Biosafety MCP Server in Streamable HTTP (SSE) mode on http://{args.host}:{args.port}/sse ...")
+        mcp.settings.host = args.host
+        mcp.settings.port = args.port
+        mcp.run(transport="sse")
+    else:
+        mcp.run(transport="stdio")
+
