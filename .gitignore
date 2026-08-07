@@ -3,7 +3,24 @@ __pycache__/
 .env
 .envrc
 *.pyc
+*.pyo
 
-# local data and indexes
+# Local database & Vector store data
 data/
 vector_index_db/
+chroma_db/
+test_chroma_db/
+*.db
+*.sqlite
+*.sqlite3
+
+# Audit logs & Generated benchmark results
+*.log
+*.csv
+results.json
+
+# IDE & OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
