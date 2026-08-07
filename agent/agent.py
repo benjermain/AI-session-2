@@ -1,10 +1,18 @@
 import argparse
 import asyncio
+import json
 import os
 import sys
-from mcp import ClientSession, StdioServerParameters
-from mcp.client.stdio import stdio_client
-from mcp.client.sse import sse_client
+
+try:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+    from mcp.client.sse import sse_client
+except ImportError:  # pragma: no cover - exercised in minimal test environments
+    ClientSession = object
+    StdioServerParameters = object
+    stdio_client = None
+    sse_client = None
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 
@@ -14,6 +22,28 @@ from memory.semantic_store import SemanticStore
 from memory.router import PromoteOrDropRouter
 from memory.consolidation import SemanticConsolidationEngine
 from context_eval.strategies import apply_context_strategy
+from rag.vector_store import VectorStoreManager
+from rag.hybrid_rag import HybridRAG
+from rag.agentic_rag import AgenticRAG
+from mcp_server.server import process_mcp_protocol_request
+
+
+class Agent:
+    def __init__(self):
+        self.vector_store = VectorStoreManager()
+        self.hybrid_rag = HybridRAG(self.vector_store, ["Vellora biosafety protocol v2.1"])
+        self.agentic_rag = AgenticRAG(self.hybrid_rag)
+
+    def execute_rag_pipeline(self, user_query: str):
+        """Executes server protocol request and verified agentic RAG pipeline."""
+        mcp_req = json.dumps({"method": "mcp/rag/query", "params": {"query": user_query}, "id": 101})
+        protocol_res = process_mcp_protocol_request(mcp_req)
+        rag_res = self.agentic_rag.retrieve_and_verify(user_query)
+        return {"protocol_response": json.loads(protocol_res), "rag_result": rag_res}
+
+
+VelloraAgent = Agent
+
 
 async def run_agent(transport: str = "stdio", sse_url: str = "http://127.0.0.1:8000/sse", interactive: bool = True):
     print("=" * 65)
