@@ -1,99 +1,18 @@
-# 🧬 Vellora Gene Synthesis & Biosafety Tracking System
+# AI-session-2: Memory + RAG scaffold
 
-## Overview & Company Profile
+This branch adds a scaffolding for the memory, context evaluation, and retrieval (RAG) work described in the project assignment. It is intended as a complete starter implementation that you can run locally, extend, and use to produce the required evaluation tables and demo transcripts.
 
-**Vellora Bio** is a biotechnology enterprise specializing in synthetic biology, gene editing vectors, and automated genetic payload manufacturing. Researchers across multiple laboratory sites use Vellora's platform to design genetic payloads, evaluate genome-wide off-target safety risks, and submit authorized sequences to the company's automated gene synthesis laboratory.
+High-level contents added in this commit:
+- memory/: short-term buffer, scratchpad, episodic store, semantic store, routing, consolidation
+- context_eval/: four context-window strategies, long transcript generator, experiment runner
+- rag/: chunker, embedder adapter, vector index adapter (Chroma placeholder), BM25 adapter, naive/hybrid/agentic RAG skeletons, Self-RAG checker
+- retrieval_eval/: a small JSON of example questions and a runner
+- adapters/: memory and rag adapters for integrating into an agent loop
+- demo/: a 40-turn demo transcript
+- run_all_experiments.sh: orchestrates context + retrieval experiments locally (example)
 
----
+Defaults and notes
+- This scaffold is intentionally dependency-light and uses in-memory stores so it can run without external services. Adapters are provided so you can switch to OpenAI embeddings, Chroma, or Qdrant by editing rag/embedder.py and rag/vector_index.py.
+- No secrets or API keys are included. Please set environment variables for any production embedding or LLM provider.
 
-## The Problem & Risk
-
-Connecting an LLM assistant directly to a gene synthesis lab database introduces severe real-world security and biosecurity risks:
-* **Sequence Hallucinations:** LLMs can output invalid sequence formatting or incorrect non-nucleotide characters.
-* **Biosafety Bypasses:** A junior researcher with BSL-1 clearance could accidentally or maliciously order the synthesis of a high-containment pathogen (Risk Tier 3 or 4).
-* **Silent Simulation Failures:** Off-target safety simulations require genome-wide alignment checks across all 24 human chromosomes. Without progress reporting, long-running simulations cause LLMs or clients to time out or proceed unverified.
-
----
-
-## Database & ERD (`db/`)
-
-The system uses SQLite (`db/vellora.db`) with relational tables defined in `db/schema.sql`:
-* **`researchers`:** Tracks researchers, departments, and BSL clearance levels (`BSL 1` to `4`).
-* **`genetic_payloads`:** Stores target sequence strings and risk tier classifications (`Tier 1` to `4`).
-* **`synthesis_jobs`:** Logs synthesis requests (`APPROVED`, `REJECTED`, `PROCESSING`, `COMPLETED`) and security audit notes.
-* **`safety_simulations`:** Records genome-wide off-target alignment scores and evaluation states.
-
-*Diagram source available in [`db/ERD.mermaid`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/db/ERD.mermaid).*
-
----
-
-## Implemented Protocol Concerns
-
-### 1. Capability Negotiation
-* **Location:** [`agent/agent.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/agent/agent.py) & [`mcp_server/server.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/mcp_server/server.py)
-* **Handshake Exchange:** Upon connecting, the client executes an explicit `session.initialize()` handshake. The client inspects the server's declared capabilities (`capabilities.tools`, `logging`, etc.) and verifies tool support before attempting to discover or dispatch calls to tools.
-
-### 2. Transport Choice & Dual Support (Local stdio & Streamable HTTP / SSE)
-* **Location:** [`mcp_server/server.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/mcp_server/server.py) & [`agent/agent.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/agent/agent.py)
-* **stdio (Local Development):** Launches the server as an in-memory child process. Used for rapid local CLI agent testing and local debugging.
-* **Streamable HTTP / SSE (Remote Enterprise Deployment):** Runs as a standalone HTTP server using Server-Sent Events (`http://127.0.0.1:8000/sse`). Essential for multi-site laboratory deployments where remote lab clients connect securely over network infrastructure without local script execution.
-
-### 3. Progress Tracking (`simulate_off_target_effects`)
-* **Location:** [`mcp_server/tools/progress_off_target.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/mcp_server/tools/progress_off_target.py)
-* **Progress Reporting:** Streams intermediate progress callbacks (*"Scanning Chromosome 1..."* through *Chromosome Y*) to prevent client connection timeouts during long alignment computations.
-
-### 4. Defensive Tool Design (`submit_synthesis_job`)
-* **Location:** [`mcp_server/tools/defensive_synthesis.py`](file:///c:/Users/benis/OneDrive/Desktop/Session%202/mcp_server/tools/defensive_synthesis.py)
-* **Schema Constraints:** Strictly enforces DNA sequence formatting restricting inputs to `^[ATCG]+$`.
-* **Server-Side Authorization:** Independent of schema types, the handler verifies `researcher.bsl_clearance >= payload.risk_tier`. Rejections (e.g. BSL-1 requesting Tier 4) are safely recorded as `REJECTED` jobs with audit log reasons rather than failing silently or leaking data.
-
----
-
-## Tool Comparison & Risk Matrix
-
-| Tool Name | Tool Type | Risk Level | Elicitation / Auth Requirement | Fallback Behavior |
-| :--- | :--- | :--- | :--- | :--- |
-| `simulate_off_target_effects` | Read-Only / Computation | Low | None (Progress reporting enabled) | Returns intermediate progress & alignment score |
-| `submit_synthesis_job` | Write / State Change | High | Server-Side BSL Authorization | Generates `REJECTED` audit log if BSL < Risk Tier |
-
----
-
-## Quick Start & Running Instructions
-
-### Main Command (Interactive Agent)
-To run the system and test live inputs (selecting your researcher identity, target payload, and DNA sequence):
-```bash
-python agent/agent.py
-```
-
----
-
-### Additional Run Modes
-
-* **Automated Test Mode:**
-  ```bash
-  python agent/agent.py --auto
-  ```
-
-* **Remote Streamable HTTP (SSE) Network Mode:**
-  If deploying over a network, start the server in SSE mode:
-  ```bash
-  # Terminal 1: Start Server
-  python mcp_server/server.py --transport sse --port 8000
-
-  # Terminal 2: Connect Agent
-  python agent/agent.py --transport sse --url http://127.0.0.1:8000/sse
-  ```
-## 🚀 Vector Store, RAG & MCP Protocol Implementation (Fady Naaim)
-
-### Architecture & Components
-1. **Vector Database (`rag/vector_store.py`, `rag/ingest.py`)**: Integrated ChromaDB using HNSW ANN indexing (`vellora_biosafety_policies`) with pre-search metadata filtering.
-2. **Retrieval Layer (`rag/hybrid_rag.py`, `rag/agentic_rag.py`)**: Implemented Naive Search, Hybrid Search (Vector + BM25 keyword matching), and Agentic Multi-hop Retrieval with query reformulation.
-3. **Self-RAG Verification (`rag/self_rag.py`)**: Added verification checks to evaluate retrieved context relevance and ensure generated answers are strictly grounded.
-4. **Server-Side Protocol Boundary (`mcp_server/server.py`)**: Created explicit server-side RPC handlers (`mcp/rag/query`) defining clear data boundaries.
-5. **Agent Integration (`agent/agent.py`)**: Wired the complete RAG and protocol execution flow into the live agent execution loop via `execute_rag_pipeline()`.
-
-### Verification & Testing
-Automated tests verifying successful protocol handling and Self-RAG failure boundaries can be run via:
-```bash
-python -m unittest discover tests
+See memory/README.md and rag/README.md for details on how to run the pieces.
