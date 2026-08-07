@@ -1,0 +1,23 @@
+[
+  {
+    "id": "q1",
+    "category": "general",
+    "question": "What is the standard fasting window before sedation for medium dogs?",
+    "ground_truth": "8-12 hours depending on food type",
+    "citation": "policy:preop:fasting"
+  },
+  {
+    "id": "q2",
+    "category": "citation",
+    "question": "What does Protocol 4.2b say about cardiac-risk patients?",
+    "ground_truth": "Use reduced sedation dose and pre-op ECG",
+    "citation": "protocol:4.2b"
+  },
+  {
+    "id": "q3",
+    "category": "multi-part",
+    "question": "For a 12-year-old dog with a heart murmur needing a dental cleaning, what pre-op screening and sedation adjustments apply?",
+    "ground_truth": "Pre-op ECG and bloodwork; reduce sedation dose and consider cardiac-friendly agents",
+    "citation": "synthesis"
+  }
+]

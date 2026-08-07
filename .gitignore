@@ -1,23 +1,9 @@
-# Python bytecode & cache
+# Byte-compiled / virtualenv
 __pycache__/
-*.py[cod]
-*$py.class
-
-# Environment & Credentials (CRITICAL REQUIREMENT IN LAB PDF)
 .env
-*.env
-.venv/
-env/
-venv/
+.envrc
+*.pyc
 
-# SQLite Databases & Logs
-*.db
-*.sqlite
-*.sqlite3
-*.log
-
-# IDE & OS Junk
-.vscode/
-.idea/
-.DS_Store
-Thumbs.db
+# local data and indexes
+data/
+vector_index_db/
