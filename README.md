@@ -84,3 +84,16 @@ python agent/agent.py
   # Terminal 2: Connect Agent
   python agent/agent.py --transport sse --url http://127.0.0.1:8000/sse
   ```
+## 🚀 Vector Store, RAG & MCP Protocol Implementation (Fady Naaim)
+
+### Architecture & Components
+1. **Vector Database (`rag/vector_store.py`, `rag/ingest.py`)**: Integrated ChromaDB using HNSW ANN indexing (`vellora_biosafety_policies`) with pre-search metadata filtering.
+2. **Retrieval Layer (`rag/hybrid_rag.py`, `rag/agentic_rag.py`)**: Implemented Naive Search, Hybrid Search (Vector + BM25 keyword matching), and Agentic Multi-hop Retrieval with query reformulation.
+3. **Self-RAG Verification (`rag/self_rag.py`)**: Added verification checks to evaluate retrieved context relevance and ensure generated answers are strictly grounded.
+4. **Server-Side Protocol Boundary (`mcp_server/server.py`)**: Created explicit server-side RPC handlers (`mcp/rag/query`) defining clear data boundaries.
+5. **Agent Integration (`agent/agent.py`)**: Wired the complete RAG and protocol execution flow into the live agent execution loop via `execute_rag_pipeline()`.
+
+### Verification & Testing
+Automated tests verifying successful protocol handling and Self-RAG failure boundaries can be run via:
+```bash
+python -m unittest discover tests
