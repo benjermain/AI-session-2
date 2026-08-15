@@ -112,6 +112,31 @@ def process_mcp_protocol_request(request_payload: str) -> str:
                 "result": {"status": "success", "query": params.get("query"), "protocol_version": "mcp-1.0"},
                 "id": payload.get("id", 1)
             })
+        if method == "mcp/planning/plan":
+            from planning.decomposition import DecompositionEngine
+            request = params.get("request", "")
+            payload_id = params.get("payload_id")
+            plan = DecompositionEngine().decompose(request, payload_id=payload_id)
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": {
+                    "status": "success",
+                    "plan": plan.model_dump(),
+                    "execution_order": plan.execution_order(),
+                    "protocol_version": "mcp-1.0",
+                },
+                "id": payload.get("id", 1),
+            })
+        if method == "mcp/planning/dynamic_plan":
+            from planning.dynamic_decomposition import DynamicDecompositionEngine
+            request = params.get("request", "")
+            engine = DynamicDecompositionEngine()
+            result = engine.run(request, executor=lambda task: {"task_id": task.id, "status": "ok"})
+            return json.dumps({
+                "jsonrpc": "2.0",
+                "result": {"status": "success", "plan": result, "protocol_version": "mcp-1.0"},
+                "id": payload.get("id", 1),
+            })
         return json.dumps({"jsonrpc": "2.0", "error": {"code": -32601, "message": "Method not found"}})
     except Exception as e:
         return json.dumps({"jsonrpc": "2.0", "error": {"code": -32700, "message": str(e)}})
