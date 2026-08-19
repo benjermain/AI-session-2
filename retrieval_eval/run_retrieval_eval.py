@@ -3,6 +3,11 @@ Run retrieval evaluation over the naive, hybrid, and agentic RAG implementations
 This script is a simple harness: it loads questions.json and runs each architecture's answer() method.
 """
 import json
+import os
+import sys
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from rag.naive_rag import NaiveRAG
 from rag.hybrid_rag import HybridRAG
 from rag.agentic_rag import AgenticRAG

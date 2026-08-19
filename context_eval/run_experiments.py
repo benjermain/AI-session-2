@@ -3,7 +3,12 @@ Run context experiments across the four strategies and produce a CSV with metric
 This is a small harness: in a real run you'd tokenize and call models; here we measure preservation of the allergy fact.
 """
 import csv
+import os
+import sys
 import time
+
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
+
 from context_eval.strategies import sliding_window, observation_masking, recursive_summarization, zone_pruning
 from context_eval.generate_long_transcripts import generate_40_turn_with_allergy
 
