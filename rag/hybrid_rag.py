@@ -50,6 +50,11 @@ class HybridRAG:
             bm25_texts = [d['text'] for d in bm25_ranks]
             combined = list(dict.fromkeys(vector_res + bm25_texts))
             return combined[:top_k]
+        elif self.corpus_documents:
+            q_words = [w for w in query.lower().split() if len(w) > 2]
+            matched = [doc for doc in self.corpus_documents if any(w in doc.lower() for w in q_words)]
+            combined = list(dict.fromkeys(vector_res + matched + self.corpus_documents))
+            return combined[:top_k]
         return vector_res
 
     def answer(self, question: str, top_k: int = 5) -> Dict[str, Any]:

@@ -132,6 +132,28 @@ class ShortTermMemory:
             "max_buffer_size": self.max_buffer_size,
         }
 
+    def get_managed_context(self, strategy_name: str = "observation_masking", **kwargs) -> Dict[str, Any]:
+        """
+        Returns context window with active context management strategy applied
+        (e.g., observation_masking, sliding_window, recursive_summarization, zone_based_pruning).
+        Guarantees that scratchpad remains intact while transcript is appropriately pruned/masked.
+        """
+        try:
+            from context_eval.strategies import apply_context_strategy
+            managed_transcript = apply_context_strategy(self.buffer, strategy_name, **kwargs)
+        except Exception:
+            managed_transcript = self.buffer
+
+        return {
+            "scratchpad": self.scratchpad.to_dict(),
+            "active_transcript": managed_transcript,
+            "buffer_count": len(managed_transcript),
+            "original_count": len(self.buffer),
+            "strategy_applied": strategy_name,
+            "max_buffer_size": self.max_buffer_size,
+        }
+
     def clear_buffer(self):
         """Clears transcript buffer without resetting scratchpad."""
         self.buffer.clear()
+

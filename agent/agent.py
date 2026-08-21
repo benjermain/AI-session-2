@@ -3,6 +3,7 @@ import asyncio
 import json
 import os
 import sys
+from typing import Dict, List, Any, Optional
 
 try:
     from mcp import ClientSession, StdioServerParameters
@@ -23,23 +24,247 @@ from memory.router import PromoteOrDropRouter
 from memory.consolidation import SemanticConsolidationEngine
 from context_eval.strategies import apply_context_strategy
 from rag.vector_store import VectorStoreManager
+from rag.ingest import ingest_policy_document
 from rag.hybrid_rag import HybridRAG
 from rag.agentic_rag import AgenticRAG
 from mcp_server.server import process_mcp_protocol_request
 
 
+DEFAULT_BIOSAFETY_POLICIES = [
+    "Vellora Biosafety Protocol 4.2b: All gene synthesis requests for Risk Tier 3 and Tier 4 payloads require BSL-3 or BSL-4 verified clearance. Cardiac risk screening is mandatory for senior canine sedation protocols.",
+    "Vellora Fast-Track Vector Protocol 1.8: BSL-1 clearance permits synthesis only for Tier 1 non-pathogenic GFP markers and standard reporter constructs.",
+    "Vellora Off-Target Safety Standard 3.1: Any sequence with aggregate off-target alignment score exceeding 0.40 must be rejected or flagged for secondary review.",
+    "Standard fasting window prior to sedation is 8 hours for BSL-2 cleared procedures.",
+    "Dual-use research of concern (DURC) policy: Viral vector modifications with potential transmission enhancement require institutional biosafety committee (IBC) sign-off."
+]
+
+
 class Agent:
-    def __init__(self):
-        self.vector_store = VectorStoreManager()
-        self.hybrid_rag = HybridRAG(self.vector_store, ["Vellora biosafety protocol v2.1"])
+    """
+    Vellora Bio Unified Agent:
+    Seamlessly integrates:
+    1. Long-Term Memory Architecture (Short-Term Buffer, Scratchpad, Episodic/Semantic Stores, Router, Consolidation)
+    2. Grounded RAG Knowledge Engine (Vector Store, BM25 Hybrid Search, Agentic Multi-Hop RAG)
+    3. Context Window Management (Observation Masking, Sliding Window, Recursive Summarization, Zone Pruning)
+    4. MCP Client & Tool Orchestration (Defensive Synthesis, Off-Target Simulation)
+    """
+    def __init__(
+        self,
+        session: Optional[ClientSession] = None,
+        max_buffer_size: int = 4,
+        vector_db_path: str = "./chroma_db",
+        active_context_strategy: str = "observation_masking"
+    ):
+        self.session = session
+        self.active_context_strategy = active_context_strategy
+
+        # 1. Initialize RAG Subsystem
+        self.vector_store = VectorStoreManager(persist_directory=vector_db_path)
+        self.policy_corpus = list(DEFAULT_BIOSAFETY_POLICIES)
+        
+        # Populate vector store if client is active
+        if self.vector_store.client is not None:
+            try:
+                for idx, doc in enumerate(self.policy_corpus):
+                    ingest_policy_document(doc, f"policy_doc_{idx}", self.vector_store)
+            except Exception:
+                pass
+
+        self.hybrid_rag = HybridRAG(self.vector_store, self.policy_corpus)
         self.agentic_rag = AgenticRAG(self.hybrid_rag)
 
-    def execute_rag_pipeline(self, user_query: str):
+        # 2. Initialize Memory Subsystem
+        self.scratchpad = Scratchpad(
+            current_plan="Interactive Gene Synthesis & Biosafety Tracking Session",
+            active_subgoal="Initializing agent subsystems",
+            working_variables={},
+            safety_constraints=["BSL clearance must satisfy target Risk Tier"]
+        )
+        self.short_term = ShortTermMemory(max_buffer_size=max_buffer_size, scratchpad=self.scratchpad)
+        self.episodic_store = EpisodicStore()
+        self.semantic_store = SemanticStore()
+        self.router = PromoteOrDropRouter(episodic_store=self.episodic_store)
+        self.consolidation = SemanticConsolidationEngine(
+            episodic_store=self.episodic_store,
+            semantic_store=self.semantic_store
+        )
+
+    def execute_rag_pipeline(self, user_query: str) -> Dict[str, Any]:
         """Executes server protocol request and verified agentic RAG pipeline."""
         mcp_req = json.dumps({"method": "mcp/rag/query", "params": {"query": user_query}, "id": 101})
         protocol_res = process_mcp_protocol_request(mcp_req)
         rag_res = self.agentic_rag.retrieve_and_verify(user_query)
         return {"protocol_response": json.loads(protocol_res), "rag_result": rag_res}
+
+    def retrieve_policy_grounding(self, query: str, update_scratchpad: bool = True) -> Dict[str, Any]:
+        """
+        Queries RAG knowledge base for biosafety policies and grounds the agent's active scratchpad.
+        """
+        hybrid_results = self.hybrid_rag.hybrid_search(query, top_k=2)
+        agentic_result = self.agentic_rag.retrieve_and_verify(query)
+
+        grounding_text = hybrid_results[0] if hybrid_results else agentic_result.get("context", "")
+        
+        if update_scratchpad and grounding_text:
+            constraint = f"[RAG Policy Grounded]: {grounding_text[:120]}"
+            self.scratchpad.add_safety_constraint(constraint)
+
+        return {
+            "query": query,
+            "hybrid_matches": hybrid_results,
+            "agentic_result": agentic_result,
+            "grounding_text": grounding_text,
+        }
+
+    def record_turn(
+        self,
+        role: str,
+        content: Any,
+        metadata: Optional[Dict[str, Any]] = None,
+        session_id: str = "default_session",
+        researcher_id: Optional[int] = None
+    ) -> List[Any]:
+        """
+        Records dialogue/tool turn in short term memory.
+        If buffer overflows, triggers Promote-or-Drop router evaluation into Episodic store.
+        """
+        pruned_items = self.short_term.add_message(role, content, metadata=metadata)
+        decisions = []
+        if pruned_items:
+            decisions = self.router.process_overflow(
+                pruned_items,
+                session_id=session_id,
+                researcher_id=researcher_id
+            )
+        return decisions
+
+    def get_managed_context_window(self, strategy: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Returns active context managed dynamically by the configured Context Window Strategy
+        (e.g., observation_masking, sliding_window, recursive_summarization, zone_based_pruning).
+        """
+        strat = strategy or self.active_context_strategy
+        return self.short_term.get_managed_context(strategy_name=strat)
+
+    async def execute_synthesis_workflow(
+        self,
+        researcher_id: int,
+        payload_id: int,
+        sequence: str,
+        session_id: str = "interactive_sess_01"
+    ) -> Dict[str, Any]:
+        """
+        End-to-end grounded synthesis workflow:
+        1. RAG Policy Grounding
+        2. Scratchpad Update
+        3. Context Compression
+        4. Defensive MCP Tool Execution
+        5. Memory Recording & Consolidation
+        """
+        self.scratchpad.update_subgoal(f"Validating synthesis job for researcher {researcher_id} on payload {payload_id}")
+        self.scratchpad.set_variable("researcher_id", researcher_id)
+        self.scratchpad.set_variable("payload_id", payload_id)
+        self.scratchpad.set_variable("sequence", sequence)
+
+        # 1. RAG Grounding
+        rag_grounding = self.retrieve_policy_grounding(f"BSL clearance authorization Risk Tier {payload_id}")
+
+        # 2. Record User Turn in Memory
+        user_msg = f"Submit synthesis job for researcher={researcher_id}, payload={payload_id}, seq={sequence}"
+        user_overflow = self.record_turn("user", user_msg, session_id=session_id, researcher_id=researcher_id)
+
+        # 3. Execute MCP Tool
+        resp_text = ""
+        if self.session is not None and hasattr(self.session, "call_tool"):
+            result = await self.session.call_tool("submit_synthesis_job", {
+                "researcher_id": researcher_id,
+                "payload_id": payload_id,
+                "sequence": sequence
+            })
+            resp_text = result.content[0].text if result.content else str(result)
+        else:
+            # Fallback for direct testing without active transport
+            from mcp_server.tools.defensive_synthesis import handle_submit_synthesis_job
+            resp_text = json.dumps(handle_submit_synthesis_job(researcher_id, payload_id, sequence), indent=2)
+
+        # 4. Record Tool Turn in Memory with Metadata
+        tool_overflow = self.record_turn(
+            "tool",
+            resp_text,
+            metadata={"tool_name": "submit_synthesis_job", "researcher_id": researcher_id, "payload_id": payload_id},
+            session_id=session_id,
+            researcher_id=researcher_id
+        )
+
+        # 5. Run Semantic Memory Consolidation Pass
+        cons_res = self.consolidation.run_consolidation_pass()
+
+        # 6. Apply Active Context Management
+        managed_ctx = self.get_managed_context_window()
+
+        return {
+            "rag_grounding": rag_grounding,
+            "server_response": resp_text,
+            "user_overflow_decisions": user_overflow,
+            "tool_overflow_decisions": tool_overflow,
+            "consolidation_result": cons_res,
+            "managed_context": managed_ctx,
+        }
+
+    async def execute_simulation_workflow(
+        self,
+        payload_id: int,
+        sequence: str,
+        session_id: str = "interactive_sess_01"
+    ) -> Dict[str, Any]:
+        """
+        End-to-end grounded simulation workflow:
+        1. RAG Off-Target Policy Grounding
+        2. MCP Simulation Tool Execution (emits large JSON)
+        3. Automatic Observation Masking Context Management
+        4. Memory Recording & Overflow Routing
+        """
+        self.scratchpad.update_subgoal(f"Executing genome-wide off-target alignment simulation for payload {payload_id}")
+        self.scratchpad.set_variable("payload_id", payload_id)
+        self.scratchpad.set_variable("sequence", sequence)
+
+        # 1. RAG Grounding
+        rag_grounding = self.retrieve_policy_grounding("Off-target safety threshold alignment score")
+
+        # 2. Record User Turn
+        user_msg = f"Run simulation for payload={payload_id}, seq={sequence}"
+        user_overflow = self.record_turn("user", user_msg, session_id=session_id)
+
+        # 3. Execute MCP Simulation Tool
+        resp_text = ""
+        if self.session is not None and hasattr(self.session, "call_tool"):
+            result = await self.session.call_tool("simulate_off_target_effects", {
+                "payload_id": payload_id,
+                "sequence": sequence
+            })
+            resp_text = result.content[0].text if result.content else str(result)
+        else:
+            from mcp_server.tools.progress_off_target import handle_simulate_off_target_effects
+            resp_text = json.dumps(handle_simulate_off_target_effects(payload_id, sequence), indent=2)
+
+        # 4. Record Tool Turn (Bulky Tool JSON)
+        tool_overflow = self.record_turn(
+            "tool",
+            resp_text,
+            metadata={"tool_name": "simulate_off_target_effects", "is_tool_output": True},
+            session_id=session_id
+        )
+
+        # 5. Apply Active Context Management (Observation Masking suppresses raw JSON)
+        managed_ctx = self.get_managed_context_window("observation_masking")
+
+        return {
+            "rag_grounding": rag_grounding,
+            "server_response": resp_text,
+            "user_overflow_decisions": user_overflow,
+            "tool_overflow_decisions": tool_overflow,
+            "managed_context": managed_ctx,
+        }
 
 
 VelloraAgent = Agent
@@ -47,8 +272,8 @@ VelloraAgent = Agent
 
 async def run_agent(transport: str = "stdio", sse_url: str = "http://127.0.0.1:8000/sse", interactive: bool = True):
     print("=" * 65)
-    print(f" VELLORA BIO - MCP AGENT (Transport: {transport.upper()})")
-    print(" Includes Long-Term Memory Architecture & Context Window Engine")
+    print(f" VELLORA BIO - INTEGRATED MCP AGENT (Transport: {transport.upper()})")
+    print(" Powered by RAG Grounding, Context Window Management & Long-Term Memory")
     print("=" * 65)
 
     if transport == "sse":
@@ -68,19 +293,13 @@ async def run_agent(transport: str = "stdio", sse_url: str = "http://127.0.0.1:8
             async with ClientSession(read, write) as session:
                 await execute_agent_session(session, interactive)
 
+
 async def execute_agent_session(session: ClientSession, interactive: bool):
     print("\n[2] Initiating Capability Negotiation (Handshake)...")
     initialize_result = await session.initialize()
     print("  Server Handshake Successful!")
     print(f"    Server Name:    {initialize_result.serverInfo.name}")
     print(f"    Server Version: {initialize_result.serverInfo.version}")
-    
-    capabilities = initialize_result.capabilities
-    has_tools = capabilities.tools is not None if hasattr(capabilities, 'tools') else True
-
-    if not has_tools:
-        print("  WARNING: Server does not declare tool capabilities! Aborting tool operations.")
-        return
 
     print("\n[3] Discovering Available Tools from Server...")
     tools_response = await session.list_tools()
@@ -88,61 +307,41 @@ async def execute_agent_session(session: ClientSession, interactive: bool):
     for tool in tools_response.tools:
         print(f"     * Tool: {tool.name} -> {tool.description[:70]}...")
 
-    # Initialize Person 2 Memory Systems
-    scratchpad = Scratchpad(
-        current_plan="Interactive Gene Synthesis & Biosafety Tracking Session",
-        active_subgoal="Initializing memory system",
-        working_variables={},
-        safety_constraints=["BSL clearance must satisfy target Risk Tier"]
-    )
-    short_term_mem = ShortTermMemory(max_buffer_size=4, scratchpad=scratchpad)
-    episodic_store = EpisodicStore()
-    semantic_store = SemanticStore()
-    router = PromoteOrDropRouter(episodic_store=episodic_store)
-    consolidation_engine = SemanticConsolidationEngine(episodic_store=episodic_store, semantic_store=semantic_store)
-
-    memory_sys = {
-        "scratchpad": scratchpad,
-        "short_term": short_term_mem,
-        "episodic": episodic_store,
-        "semantic": semantic_store,
-        "router": router,
-        "consolidation": consolidation_engine,
-    }
+    # Initialize Integrated Agent with RAG, Memory, Context Management, and MCP session
+    agent = VelloraAgent(session=session, max_buffer_size=4)
+    print("\n[4] Initialized Integrated Agent Subsystems:")
+    print("    - Grounded RAG (Hybrid BM25 + Vector Search + Agentic Multi-Hop)")
+    print("    - Long-Term Memory (Scratchpad, Rolling Buffer, Episodic/Semantic Stores, Router)")
+    print("    - Dynamic Context Window Management (Observation Masking & Zone Pruning)")
 
     if not interactive:
-        await run_automated_demo(session, memory_sys)
+        await run_automated_demo(agent)
         return
 
-    await run_interactive_mode(session, memory_sys)
+    await run_interactive_mode(agent)
 
-async def run_interactive_mode(session: ClientSession, memory_sys: dict):
+
+async def run_interactive_mode(agent: VelloraAgent):
     print("\n" + "=" * 65)
-    print(" VELLORA BIO - INTERACTIVE TERMINAL (MEMORY SYSTEM ACTIVE)")
+    print(" VELLORA BIO - INTERACTIVE AGENT TERMINAL")
     print("=" * 65)
 
     loop = asyncio.get_event_loop()
-    short_term = memory_sys["short_term"]
-    scratchpad = memory_sys["scratchpad"]
-    router = memory_sys["router"]
-    consolidation = memory_sys["consolidation"]
-    semantic_store = memory_sys["semantic"]
-
-    session_id = "interactive_sess_01"
 
     while True:
         print("\nSelect an action:")
-        print("  1: Submit Synthesis Job (Records turn, updates Scratchpad, triggers Router)")
-        print("  2: Run Off-Target Simulation (Updates Scratchpad, records turn)")
-        print("  3: View Active Memory State (Scratchpad, Buffer, Facts, Router Audit)")
-        print("  4: Run Context Window Management Pruning Strategy (Test 4 Strategies)")
-        print("  5: Trigger Periodic Semantic Memory Consolidation Pass")
-        print("  6: Exit")
-        
-        choice = await loop.run_in_executor(None, input, "\nEnter choice (1-6): ")
+        print("  1: Submit Synthesis Job (RAG Grounding -> Context Masking -> MCP Tool)")
+        print("  2: Run Off-Target Simulation (RAG Check -> Large JSON -> Auto-Masking)")
+        print("  3: Query Biosafety Policy Knowledge Base (Hybrid & Agentic RAG)")
+        print("  4: View Active Memory & Managed Context Window Dashboard")
+        print("  5: Test Context Window Management Strategy (Sliding, Masking, Summary, Zone)")
+        print("  6: Trigger Periodic Semantic Memory Consolidation Pass")
+        print("  7: Exit")
+
+        choice = await loop.run_in_executor(None, input, "\nEnter choice (1-7): ")
         choice = choice.strip()
 
-        if choice == "6" or choice.lower() == "exit":
+        if choice == "7" or choice.lower() in ["exit", "quit"]:
             print("\nExiting Interactive Terminal. Goodbye!")
             break
 
@@ -152,7 +351,7 @@ async def run_interactive_mode(session: ClientSession, memory_sys: dict):
             print("  2: Dr. Bob Smith (BSL-2 Clearance - Genomics)")
             print("  3: Dr. Clara Oswald (BSL-3 Clearance - Virology & Vectors)")
             print("  4: Dr. David Banner (BSL-4 Clearance - High Containment Lab)")
-            
+
             res_input = await loop.run_in_executor(None, input, "Enter Researcher ID (1-4) [default: 1]: ")
             res_id = int(res_input.strip()) if res_input.strip().isdigit() else 1
 
@@ -168,46 +367,22 @@ async def run_interactive_mode(session: ClientSession, memory_sys: dict):
             seq_input = await loop.run_in_executor(None, input, "Enter DNA Sequence (ATCG characters) [default: ATCGATCG]: ")
             sequence = seq_input.strip().upper() if seq_input.strip() else "ATCGATCG"
 
-            scratchpad.update_subgoal("Submitting synthesis job and checking authorization")
-            scratchpad.set_variable("researcher_id", res_id)
-            scratchpad.set_variable("payload_id", pay_id)
-            scratchpad.set_variable("sequence", sequence)
+            print(f"\n[PIPELINE START] Submitting Job -> Researcher ID: {res_id} | Payload ID: {pay_id} | Sequence: '{sequence}'")
+            workflow_res = await agent.execute_synthesis_workflow(res_id, pay_id, sequence)
 
-            print(f"\nSubmitting Job -> Researcher ID: {res_id} | Payload ID: {pay_id} | Sequence: '{sequence}'")
-            
-            # Record user turn in short term memory
-            pruned_user = short_term.add_message("user", f"Submit job for researcher={res_id}, payload={pay_id}, seq={sequence}")
-            if pruned_user:
-                decisions = router.process_overflow(pruned_user, session_id=session_id, researcher_id=res_id)
-                print(f"  [ROUTER OVERFLOW] Pruned {len(pruned_user)} items -> Evaluated by Router!")
+            print(f"\n[1. RAG POLICY GROUNDING]")
+            print(f"  Grounded Policy: {workflow_res['rag_grounding']['grounding_text']}")
 
-            try:
-                result = await session.call_tool("submit_synthesis_job", {
-                    "researcher_id": res_id,
-                    "payload_id": pay_id,
-                    "sequence": sequence
-                })
-                resp_text = result.content[0].text if result.content else str(result)
-                print("\nSERVER RESPONSE:")
-                print(resp_text)
+            print("\n[2. SERVER RESPONSE]")
+            print(workflow_res["server_response"])
 
-                # Record tool response in short term memory
-                pruned_tool = short_term.add_message(
-                    "tool",
-                    resp_text,
-                    {"tool_name": "submit_synthesis_job", "researcher_id": res_id, "payload_id": pay_id}
-                )
-                if pruned_tool:
-                    decisions = router.process_overflow(pruned_tool, session_id=session_id, researcher_id=res_id)
-                    print(f"  [ROUTER OVERFLOW] Pruned {len(pruned_tool)} items -> Evaluated by Router!")
+            if workflow_res["user_overflow_decisions"] or workflow_res["tool_overflow_decisions"]:
+                print(f"\n[3. MEMORY OVERFLOW ROUTING]")
+                for d in workflow_res["user_overflow_decisions"] + workflow_res["tool_overflow_decisions"]:
+                    print(f"  -> Router Decision: [{d.decision}] Reason: {d.reasoning}")
 
-                # Run automatic consolidation pass
-                cons_res = consolidation.run_consolidation_pass()
-                if cons_res.get("facts_updated", 0) > 0:
-                    print(f"  [CONSOLIDATION PASS] Updated {cons_res['facts_updated']} facts! (Conflicts resolved: {cons_res['conflicts_resolved']})")
-
-            except Exception as e:
-                print(f"\nERROR: {e}")
+            if workflow_res["consolidation_result"].get("facts_updated", 0) > 0:
+                print(f"\n[4. CONSOLIDATION PASS] Updated {workflow_res['consolidation_result']['facts_updated']} facts.")
 
         elif choice == "2":
             print("\n--- RUN SAFETY SIMULATION ---")
@@ -217,67 +392,69 @@ async def run_interactive_mode(session: ClientSession, memory_sys: dict):
             seq_input = await loop.run_in_executor(None, input, "Enter DNA Sequence [default: ATCGATCGATCG]: ")
             sequence = seq_input.strip().upper() if seq_input.strip() else "ATCGATCGATCG"
 
-            scratchpad.update_subgoal("Executing genome-wide off-target alignment simulation")
-            scratchpad.set_variable("payload_id", pay_id)
-            scratchpad.set_variable("sequence", sequence)
+            print(f"\n[PIPELINE START] Starting Genome Simulation -> Payload ID: {pay_id} | Sequence: '{sequence}'")
+            workflow_res = await agent.execute_simulation_workflow(pay_id, sequence)
 
-            print(f"\nStarting Genome Simulation -> Payload ID: {pay_id} | Sequence: '{sequence}'")
-            
-            pruned_user = short_term.add_message("user", f"Run simulation for payload={pay_id}, seq={sequence}")
-            if pruned_user:
-                router.process_overflow(pruned_user, session_id=session_id)
+            print(f"\n[1. RAG POLICY GROUNDING]")
+            print(f"  Grounded Policy: {workflow_res['rag_grounding']['grounding_text']}")
 
-            try:
-                result = await session.call_tool("simulate_off_target_effects", {
-                    "payload_id": pay_id,
-                    "sequence": sequence
-                })
-                resp_text = result.content[0].text if result.content else str(result)
-                print("\nSIMULATION RESULT:")
-                print(resp_text)
+            print("\n[2. SIMULATION RESULT]")
+            print(workflow_res["server_response"])
 
-                pruned_tool = short_term.add_message("tool", resp_text, {"tool_name": "simulate_off_target_effects"})
-                if pruned_tool:
-                    router.process_overflow(pruned_tool, session_id=session_id)
-
-            except Exception as e:
-                print(f"\nERROR: {e}")
+            print(f"\n[3. DYNAMIC CONTEXT MANAGEMENT (Observation Masking Active)]")
+            print(f"  Context Window contains {workflow_res['managed_context']['buffer_count']} turns.")
 
         elif choice == "3":
+            print("\n--- QUERY BIOSAFETY POLICY KNOWLEDGE BASE (RAG) ---")
+            query_input = await loop.run_in_executor(None, input, "Enter search query [e.g., 'Protocol 4.2b cardiac sedation']: ")
+            query_text = query_input.strip() or "Protocol 4.2b cardiac risk screening"
+
+            print(f"\nExecuting Hybrid (Vector + BM25) & Agentic RAG for: '{query_text}'...")
+            rag_output = agent.retrieve_policy_grounding(query_text, update_scratchpad=True)
+
+            print(f"\n[Hybrid RAG Top Matches]:")
+            for idx, match in enumerate(rag_output["hybrid_matches"], 1):
+                print(f"  {idx}. {match}")
+
+            print(f"\n[Agentic RAG Verification Status]: {rag_output['agentic_result'].get('status')}")
+            print(f"  Verified Context: {rag_output['agentic_result'].get('context')}")
+            print(f"  (Scratchpad safety constraints updated with verified policy grounding)")
+
+        elif choice == "4":
             print("\n" + "-" * 65)
-            print(" ACTIVE MEMORY STATE DASHBOARD")
+            print(" ACTIVE MEMORY & CONTEXT DASHBOARD")
             print("-" * 65)
-            
-            ctx = short_term.get_working_context()
+
+            ctx = agent.get_managed_context_window()
             sp = ctx["scratchpad"]
-            print(f"1. SCRATCHPAD STATE (Plan & Subgoal):")
-            print(f"   Current Plan:    {sp['current_plan']}")
-            print(f"   Active Subgoal:  {sp['active_subgoal']}")
-            print(f"   Variables:       {sp['working_variables']}")
-            print(f"   Constraints:     {sp['safety_constraints']}")
+            print(f"1. SCRATCHPAD WORKING STATE:")
+            print(f"   Current Plan:        {sp['current_plan']}")
+            print(f"   Active Subgoal:      {sp['active_subgoal']}")
+            print(f"   Working Variables:   {sp['working_variables']}")
+            print(f"   Safety Constraints:  {sp['safety_constraints']}")
 
-            print(f"\n2. ROLLING SHORT-TERM BUFFER ({ctx['buffer_count']}/{ctx['max_buffer_size']} turns):")
+            print(f"\n2. MANAGED TRANSCRIPT BUFFER ({ctx['buffer_count']}/{ctx['max_buffer_size']} turns, Strategy: {ctx['strategy_applied']}):")
             for msg in ctx["active_transcript"]:
-                role = msg["role"].upper()
-                text = str(msg["content"])[:70].replace("\n", " ")
-                print(f"   Turn {msg['turn_id']} [{role}]: {text}...")
+                role = msg.get("role", "unknown").upper()
+                text = str(msg.get("content", ""))[:85].replace("\n", " ")
+                print(f"   Turn {msg.get('turn_id', '?')} [{role}]: {text}...")
 
-            print("\n3. ACTIVE SEMANTIC FACTS:")
-            facts = semantic_store.list_all_active_facts()
+            print("\n3. ACTIVE CONSOLIDATED SEMANTIC FACTS:")
+            facts = agent.semantic_store.list_all_active_facts()
             if not facts:
                 print("   (No active semantic facts consolidated yet)")
             for f in facts:
                 print(f"   * Fact '{f.fact_key}' -> Value: '{f.value}' (v{f.version}, confidence: {f.confidence})")
 
             print("\n4. RECENT ROUTER DECISION AUDIT LOG:")
-            history = router.get_decision_history(limit=5)
+            history = agent.router.get_decision_history(limit=5)
             if not history:
                 print("   (No overflow decisions logged yet)")
             for h in history:
                 print(f"   * [{h['decision']}] Summary: {h['item_summary'][:60]} | Reason: {h['reasoning']}")
 
-        elif choice == "4":
-            print("\n--- CONTEXT WINDOW MANAGEMENT PRUNING STRATEGIES ---")
+        elif choice == "5":
+            print("\n--- TEST CONTEXT WINDOW PRUNING STRATEGIES ---")
             print("Select Strategy to apply on current transcript:")
             print("  1: Sliding Window")
             print("  2: Observation & Tool Output Masking")
@@ -291,115 +468,98 @@ async def run_interactive_mode(session: ClientSession, memory_sys: dict):
             elif strat_choice == "3": strat_name = "recursive_summarization"
             elif strat_choice == "4": strat_name = "zone_based_pruning"
 
-            pruned_transcript = apply_context_strategy(short_term.buffer, strat_name)
+            managed = agent.get_managed_context_window(strategy=strat_name)
             print(f"\n[STRATEGY RESULT: '{strat_name}']")
-            print(f"Original Turn Count: {len(short_term.buffer)} -> Pruned Count: {len(pruned_transcript)}")
-            for idx, msg in enumerate(pruned_transcript, 1):
+            print(f"Original Count: {managed['original_count']} -> Managed Count: {managed['buffer_count']}")
+            for idx, msg in enumerate(managed["active_transcript"], 1):
                 role = msg.get("role", "unknown").upper()
                 text = str(msg.get("content", ""))[:90].replace("\n", " ")
                 print(f"  {idx}. [{role}]: {text}")
 
-        elif choice == "5":
+        elif choice == "6":
             print("\n--- TRIGGERING PERIODIC SEMANTIC CONSOLIDATION PASS ---")
-            cons_res = consolidation.run_consolidation_pass()
+            cons_res = agent.consolidation.run_consolidation_pass()
             print(f"Consolidation Pass Status:      {cons_res['status']}")
             print(f"Episodes Processed:            {cons_res.get('episodes_processed', 0)}")
             print(f"Facts Updated:                 {cons_res.get('facts_updated', 0)}")
             print(f"Conflicts / Contradictions:   {cons_res.get('conflicts_resolved', 0)}")
 
         else:
-            print("Invalid choice. Please enter a number between 1 and 6.")
+            print("Invalid choice. Please enter a number between 1 and 7.")
 
-async def run_automated_demo(session: ClientSession, memory_sys: dict):
-    short_term = memory_sys["short_term"]
-    scratchpad = memory_sys["scratchpad"]
-    router = memory_sys["router"]
-    consolidation = memory_sys["consolidation"]
-    semantic_store = memory_sys["semantic"]
 
+async def run_automated_demo(agent: VelloraAgent):
     print("\n" + "=" * 65)
-    print(" VELLORA BIO - AUTOMATED DEMO WITH MEMORY & CONTEXT SYSTEM")
+    print(" VELLORA BIO - FULLY INTEGRATED AGENT DEMO")
+    print(" Demonstrating RAG Grounding, Context Management & Memory Architecture")
     print("=" * 65)
 
     print("\n" + "-" * 65)
-    print(" CONCERN 1: Progress Tracking (simulate_off_target_effects)")
+    print(" PHASE 1: RAG Biosafety Policy Grounding (Protocol 4.2b)")
     print("-" * 65)
-    
-    scratchpad.update_subgoal("Running off-target safety simulation for payload 1")
-    sim_result = await session.call_tool("simulate_off_target_effects", {
-        "payload_id": 1,
-        "sequence": "ATCGATCGATCG"
-    })
-    resp1 = sim_result.content[0].text if sim_result.content else str(sim_result)
+    rag_info = agent.retrieve_policy_grounding("Protocol 4.2b cardiac risk screening")
+    print(f"  Query: 'Protocol 4.2b cardiac risk screening'")
+    print(f"  Hybrid RAG Retrieval Match:")
+    print(f"   -> \"{rag_info['grounding_text']}\"")
+    print(f"  Agentic RAG Status: {rag_info['agentic_result'].get('status').upper()}")
+    print(f"  Scratchpad Constraints Updated: {agent.scratchpad.safety_constraints}")
+
+    print("\n" + "-" * 65)
+    print(" PHASE 2: Grounded Off-Target Simulation (Bulky Tool JSON Handling)")
+    print("-" * 65)
+    sim_res = await agent.execute_simulation_workflow(payload_id=1, sequence="ATCGATCGATCG", session_id="auto_demo")
     print("  Simulation Output:")
-    print(resp1)
-
-    # Record in short-term memory
-    short_term.add_message("user", "Run simulation for payload 1 sequence ATCGATCGATCG")
-    short_term.add_message("tool", resp1, {"tool_name": "simulate_off_target_effects"})
+    print(sim_res["server_response"])
+    print(f"  Dynamic Context Strategy Applied: {sim_res['managed_context']['strategy_applied']}")
+    print(f"  Context Window Turn Count: {sim_res['managed_context']['buffer_count']}")
 
     print("\n" + "-" * 65)
-    print(" CONCERN 2: Defensive Tool Design (submit_synthesis_job)")
+    print(" PHASE 3: Defensive Tool Design & BSL Authorization")
     print("-" * 65)
+    print("Case A: Authorized Job (Dr. David Banner BSL-4 >= Tier 1):")
+    auth_res = await agent.execute_synthesis_workflow(researcher_id=4, payload_id=1, sequence="ATCGATCG", session_id="auto_demo")
+    print("  Authorization Output:")
+    print(auth_res["server_response"])
 
-    print("Case A: Submitting Synthesis Job (Researcher BSL-4 >= Payload Risk Tier 1):")
-    scratchpad.update_subgoal("Submitting BSL-4 authorized job")
-    job_result = await session.call_tool("submit_synthesis_job", {
-        "researcher_id": 4,
-        "payload_id": 1,
-        "sequence": "ATCGATCG"
-    })
-    resp2 = job_result.content[0].text if job_result.content else str(job_result)
-    print("  Authorization Success Output:")
-    print(resp2)
-
-    short_term.add_message("user", "Submit synthesis job for researcher=4 payload=1")
-    short_term.add_message("tool", resp2, {"tool_name": "submit_synthesis_job"})
-
-    print("\nCase B: Submitting Synthesis Job with Low Clearance (Researcher BSL-1 < Risk Tier 4):")
-    scratchpad.update_subgoal("Testing low clearance rejection")
-    rej_result = await session.call_tool("submit_synthesis_job", {
-        "researcher_id": 1,
-        "payload_id": 4,
-        "sequence": "ATCGATCG"
-    })
-    resp3 = rej_result.content[0].text if rej_result.content else str(rej_result)
+    print("\nCase B: Low Clearance Rejection (Dr. Alice Vance BSL-1 < Tier 4):")
+    rej_res = await agent.execute_synthesis_workflow(researcher_id=1, payload_id=4, sequence="ATCGATCG", session_id="auto_demo")
     print("  Defensive Security Rejection Output:")
-    print(resp3)
-
-    # Adding messages will trigger short term buffer overflow (max 4)
-    pruned_msgs = short_term.add_message("user", "Submit synthesis job for researcher=1 payload=4")
-    if pruned_msgs:
-        print(f"\n  [MEMORY OVERFLOW TRIGGERED] Buffer exceeded max_buffer_size(4). Pruned {len(pruned_msgs)} items.")
-        decisions = router.process_overflow(pruned_msgs, session_id="auto_demo", researcher_id=1)
-        for d in decisions:
-            print(f"   -> ROUTER DECISION: [{d.decision}] | Reason: {d.reasoning}")
+    print(rej_res["server_response"])
 
     print("\n" + "-" * 65)
-    print(" CONCERN 3: Semantic Memory Consolidation & Contradiction Resolution")
+    print(" PHASE 4: Memory Buffer Overflow & Promote-or-Drop Router")
     print("-" * 65)
+    all_decisions = rej_res["user_overflow_decisions"] + rej_res["tool_overflow_decisions"]
+    print(f"  Buffer Overflow Processed {len(all_decisions)} Aging Items:")
+    for d in all_decisions:
+        print(f"   -> ROUTER DECISION: [{d.decision}] | Reason: {d.reasoning}")
 
-    cons_res = consolidation.run_consolidation_pass()
+    print("\n" + "-" * 65)
+    print(" PHASE 5: Semantic Memory Consolidation & Conflict Resolution")
+    print("-" * 65)
+    cons_res = agent.consolidation.run_consolidation_pass()
     print(f"  Consolidation Pass Executed -> Facts Updated: {cons_res['facts_updated']}, Conflicts Resolved: {cons_res['conflicts_resolved']}")
-    
-    active_facts = semantic_store.list_all_active_facts()
-    print("\n  Active Consolidated Semantic Facts:")
+    active_facts = agent.semantic_store.list_all_active_facts()
+    print("  Active Consolidated Semantic Facts:")
     for f in active_facts:
         print(f"   * [{f.fact_key}] -> Value: '{f.value}' (Version {f.version})")
 
     print("\n" + "-" * 65)
-    print(" CONCERN 4: Context Window Strategy Execution")
+    print(" PHASE 6: Dynamic Context Management Pruning Output")
     print("-" * 65)
+    managed_ctx = agent.get_managed_context_window("observation_masking")
+    print(f"  Active Managed Context ({managed_ctx['buffer_count']} turns):")
+    for idx, msg in enumerate(managed_ctx["active_transcript"], 1):
+        content_preview = str(msg.get("content", ""))[:80].replace("\n", " ")
+        print(f"   {idx}. [{msg.get('role', 'unknown').upper()}]: {content_preview}...")
 
-    masked_transcript = apply_context_strategy(short_term.buffer, "observation_masking")
-    print(f"  Applied Observation Masking Strategy to Transcript ({len(masked_transcript)} turns):")
-    for idx, msg in enumerate(masked_transcript, 1):
-        print(f"   {idx}. [{msg['role'].upper()}]: {str(msg['content'])[:80]}...")
+    print("\n" + "=" * 65)
+    print(" FULLY INTEGRATED AGENT PIPELINE DEMO COMPLETED SUCCESSFULLY!")
+    print("=" * 65)
 
-    print("\nAUTOMATED DEMO WITH MEMORY & CONTEXT MANAGEMENT COMPLETED SUCCESSFULLY!")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Vellora Bio MCP Client Agent with Long-Term Memory")
+    parser = argparse.ArgumentParser(description="Vellora Bio MCP Client Agent with Integrated RAG, Context Management & Memory")
     parser.add_argument("--transport", choices=["stdio", "sse"], default="stdio", help="Transport mode to connect")
     parser.add_argument("--url", default="http://127.0.0.1:8000/sse", help="SSE Endpoint URL")
     parser.add_argument("--auto", action="store_true", help="Run automated demo test cases non-interactively")
