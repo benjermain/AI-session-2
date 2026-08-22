@@ -22,13 +22,30 @@ from memory.buffer import RollingBuffer
 from memory.episodic_store import EpisodicStore
 from memory.semantic_store import SemanticStore
 from memory.router import PromoteOrDropRouter
+from memory.routing import decide_routing
 from memory.consolidation import SemanticConsolidationEngine
-from context_eval.strategies import apply_context_strategy
+from context_eval.strategies import (
+    apply_context_strategy,
+    sliding_window_strategy,
+    observation_masking_strategy,
+    recursive_summarization_strategy,
+    zone_based_pruning_strategy,
+    sliding_window,
+    observation_masking,
+    recursive_summarization,
+    zone_pruning,
+)
 from rag.vector_store import VectorStoreManager
 from rag.ingest import ingest_policy_document
 from rag.hybrid_rag import HybridRAG
 from rag.agentic_rag import AgenticRAG
+from rag.self_rag import SelfRAGVerifier
+from rag.self_rag_checker import verify_citations
 from planning.llm_adapter import LLMAdapter
+from planning.grounded_environment import GroundedEnvironment
+from planning.self_refine import self_refine
+from planning.reflexion import reflexion, ReflexionMemory
+from planning.router import route_subtask, classify_subtask, TaskType
 from mcp_server.server import process_mcp_protocol_request
 
 
@@ -105,6 +122,10 @@ class Agent:
             semantic_store=self.semantic_store
         )
 
+        # 5. Initialize Grounded Planning & Self-Correction Engine
+        self.grounded_env = GroundedEnvironment()
+        self.reflexion_memory = ReflexionMemory(memory_size=3)
+
     def execute_rag_pipeline(self, user_query: str) -> Dict[str, Any]:
         """Executes server protocol request and verified agentic RAG pipeline."""
         mcp_req = json.dumps({"method": "mcp/rag/query", "params": {"query": user_query}, "id": 101})
@@ -115,12 +136,15 @@ class Agent:
     def retrieve_policy_grounding(self, query: str, update_scratchpad: bool = True) -> Dict[str, Any]:
         """
         Queries RAG knowledge base for biosafety policies and grounds the agent's active scratchpad.
+        Verifies groundedness with SelfRAGVerifier.
         """
         hybrid_results = self.hybrid_rag.hybrid_search(query, top_k=2)
         agentic_result = self.agentic_rag.retrieve_and_verify(query)
 
         grounding_text = hybrid_results[0] if hybrid_results else agentic_result.get("context", "")
-        
+        is_relevant = SelfRAGVerifier.verify_relevance(query, grounding_text) if grounding_text else False
+        is_grounded = SelfRAGVerifier.verify_groundedness(query, grounding_text) if grounding_text else False
+
         if update_scratchpad and grounding_text:
             constraint = f"[RAG Policy Grounded]: {grounding_text[:120]}"
             self.scratchpad.add_safety_constraint(constraint)
@@ -130,7 +154,41 @@ class Agent:
             "hybrid_matches": hybrid_results,
             "agentic_result": agentic_result,
             "grounding_text": grounding_text,
+            "self_rag_verified": is_relevant and is_grounded,
         }
+
+    def apply_context_strategy(self, strategy_name: str, **kwargs) -> List[Dict[str, Any]]:
+        """Direct entry point for context strategy execution on active transcript."""
+        return apply_context_strategy(self.short_term.buffer, strategy_name, **kwargs)
+
+    def slide_context_window(self, last_k: int = 10) -> List[Dict[str, Any]]:
+        """Applies sliding window context strategy."""
+        return sliding_window(self.short_term.buffer, last_k=last_k)
+
+    def mask_tool_observations(self, keep_last_tool_outputs: int = 3, keep_last_turns: int = 3) -> List[Dict[str, Any]]:
+        """Applies observation and tool output masking strategy."""
+        return observation_masking(self.short_term.buffer, keep_last_tool_outputs=keep_last_tool_outputs, keep_last_turns=keep_last_turns)
+
+    def summarize_context_history(self, chunk_size: int = 8) -> List[Dict[str, Any]]:
+        """Applies recursive summarization context strategy."""
+        return recursive_summarization(self.short_term.buffer, chunk_size=chunk_size)
+
+    def prune_context_zones(self) -> List[Dict[str, Any]]:
+        """Applies zone-based context pruning strategy."""
+        return zone_pruning(self.short_term.buffer)
+
+    def plan_and_route_task(self, instruction: str, context: str = "") -> Dict[str, Any]:
+        """Routes task to appropriate planning algorithm (Plan-and-Solve, Tree of Thoughts, LATS)."""
+        return route_subtask(instruction, context, self.llm, self.grounded_env)
+
+    def refine_plan_with_grounding(self, draft_plan: str) -> Any:
+        """Evaluates draft plan against vellora.db and triggers Self-Refine if invalid."""
+        feedback = self.grounded_env.evaluate(draft_plan)
+        return self_refine(draft_plan, feedback, self.llm, self.grounded_env)
+
+    def verify_rag_citations(self, response_text: str, retrieved_chunks: List[Dict[str, Any]]) -> Dict[str, Any]:
+        """Verifies that response citations exist in retrieved RAG chunks."""
+        return verify_citations(response_text, retrieved_chunks)
 
     def record_turn(
         self,
@@ -433,12 +491,13 @@ async def run_interactive_mode(agent: VelloraAgent):
         print("  5: Test Context Window Management Strategy (Sliding, Masking, Summary, Zone)")
         print("  6: Free-Form Agent Chat (Processes via Context Management & RAG)")
         print("  7: Trigger Periodic Semantic Memory Consolidation Pass")
-        print("  8: Exit")
+        print("  8: Run Grounded Planning & Self-Correction Engine (Self-Refine & LATS)")
+        print("  9: Exit")
 
-        choice = await loop.run_in_executor(None, input, "\nEnter choice (1-8): ")
+        choice = await loop.run_in_executor(None, input, "\nEnter choice (1-9): ")
         choice = choice.strip()
 
-        if choice == "8" or choice.lower() in ["exit", "quit"]:
+        if choice == "9" or choice.lower() in ["exit", "quit"]:
             print("\nExiting Interactive Terminal. Goodbye!")
             break
 
@@ -469,6 +528,7 @@ async def run_interactive_mode(agent: VelloraAgent):
 
             print(f"\n[1. RAG POLICY GROUNDING]")
             print(f"  Grounded Policy: {workflow_res['rag_grounding']['grounding_text']}")
+            print(f"  Self-RAG Verified: {workflow_res['rag_grounding'].get('self_rag_verified')}")
 
             print(f"\n[2. CONTEXT MANAGEMENT & AGENT REASONING]")
             print(f"  Managed LLM Prompt Messages Count: {workflow_res['llm_prompt_messages_count']}")
@@ -520,6 +580,7 @@ async def run_interactive_mode(agent: VelloraAgent):
 
             print(f"\n[Agentic RAG Verification Status]: {rag_output['agentic_result'].get('status')}")
             print(f"  Verified Context: {rag_output['agentic_result'].get('context')}")
+            print(f"  Self-RAG Grounding Verified: {rag_output.get('self_rag_verified')}")
             print(f"  (Scratchpad safety constraints updated with verified policy grounding)")
 
         elif choice == "4":
@@ -596,8 +657,29 @@ async def run_interactive_mode(agent: VelloraAgent):
             print(f"Facts Updated:                 {cons_res.get('facts_updated', 0)}")
             print(f"Conflicts / Contradictions:   {cons_res.get('conflicts_resolved', 0)}")
 
+        elif choice == "8":
+            print("\n--- GROUNDED PLANNING & SELF-CORRECTION ENGINE ---")
+            print("1. Test Self-Refine on Clearance Error")
+            print("2. Route and Execute Subtask (Plan-and-Solve / Tree of Thoughts / LATS)")
+            plan_choice = await loop.run_in_executor(None, input, "Enter choice (1-2) [default: 1]: ")
+            if plan_choice.strip() == "2":
+                inst = await loop.run_in_executor(None, input, "Enter subtask instruction: ")
+                route_res = agent.plan_and_route_task(inst.strip() or "Optimize codon sequence for vector payload #4")
+                print(f"\n[PLANNING ROUTER RESULT]")
+                print(f"  Selected Algorithm: {route_res['algorithm']}")
+                print(f"  Output: {route_res.get('output', route_res.get('best_state', ''))}")
+            else:
+                draft = "Allocate Researcher ID=1 (BSL-1) to Risk Tier 4 (Dangerous) payload synthesis"
+                print(f"\nEvaluating Draft Plan: '{draft}' against vellora.db...")
+                refine_res = agent.refine_plan_with_grounding(draft)
+                print(f"  Feedback Before: success={refine_res.feedback_before.success}, score={refine_res.feedback_before.score}")
+                print(f"  Critique: {refine_res.critique}")
+                print(f"  Revised Plan: {refine_res.revised}")
+                print(f"  Feedback After: success={refine_res.feedback_after.success}, score={refine_res.feedback_after.score}")
+                print(f"  Self-Refine Improved: {refine_res.improved}")
+
         else:
-            print("Invalid choice. Please enter a number between 1 and 8.")
+            print("Invalid choice. Please enter a number between 1 and 9.")
 
 
 async def run_automated_demo(agent: VelloraAgent):
@@ -607,13 +689,14 @@ async def run_automated_demo(agent: VelloraAgent):
     print("=" * 65)
 
     print("\n" + "-" * 65)
-    print(" PHASE 1: RAG Biosafety Policy Grounding (Protocol 4.2b)")
+    print(" PHASE 1: RAG Biosafety Policy Grounding (Protocol 4.2b & Self-RAG)")
     print("-" * 65)
     rag_info = agent.retrieve_policy_grounding("Protocol 4.2b cardiac risk screening")
     print(f"  Query: 'Protocol 4.2b cardiac risk screening'")
     print(f"  Hybrid RAG Retrieval Match:")
     print(f"   -> \"{rag_info['grounding_text']}\"")
     print(f"  Agentic RAG Status: {rag_info['agentic_result'].get('status').upper()}")
+    print(f"  Self-RAG Groundedness Verified: {rag_info.get('self_rag_verified')}")
     print(f"  Scratchpad Constraints Updated: {agent.scratchpad.safety_constraints}")
 
     print("\n" + "-" * 65)
@@ -659,13 +742,22 @@ async def run_automated_demo(agent: VelloraAgent):
         print(f"   * [{f.fact_key}] -> Value: '{f.value}' (Version {f.version})")
 
     print("\n" + "-" * 65)
-    print(" PHASE 6: Dynamic Context Management Prompt Assembly (4-Zones)")
+    print(" PHASE 6: Grounded Planning & Self-Refine Correction (Issue #9, #10a)")
     print("-" * 65)
-    managed_llm_messages = agent.build_managed_context_for_llm(strategy="observation_masking")
-    print(f"  Constructed 4-Zone LLM Prompt Messages ({len(managed_llm_messages)} zones/turns):")
-    for idx, (role, content) in enumerate(managed_llm_messages, 1):
-        content_preview = str(content)[:80].replace("\n", " ")
-        print(f"   {idx}. [{role.upper()}]: {content_preview}...")
+    bad_plan = "Allocate Researcher ID=1 (BSL-1) to Risk Tier 4 (Dangerous) payload synthesis"
+    print(f"  Evaluating Proposed Plan: '{bad_plan}'")
+    refine_result = agent.refine_plan_with_grounding(bad_plan)
+    print(f"  Initial Grounded Evaluation: success={refine_result.feedback_before.success}, score={refine_result.feedback_before.score}")
+    print(f"  Self-Refine Critique: \"{refine_result.critique}\"")
+    print(f"  Corrected Plan: \"{refine_result.revised}\"")
+    print(f"  Post-Refinement Grounded Evaluation: success={refine_result.feedback_after.success}, score={refine_result.feedback_after.score}")
+
+    print("\n" + "-" * 65)
+    print(" PHASE 7: Dynamic Context Management Multi-Strategy Live Comparison")
+    print("-" * 65)
+    for strat in ["sliding_window", "observation_masking", "recursive_summarization", "zone_based_pruning"]:
+        managed_msgs = agent.build_managed_context_for_llm(strategy=strat)
+        print(f"  Strategy: '{strat:<24}' -> Formatted Prompt Zones/Turns: {len(managed_msgs)}")
 
     print("\n" + "=" * 65)
     print(" FULLY INTEGRATED AGENT PIPELINE DEMO COMPLETED SUCCESSFULLY!")

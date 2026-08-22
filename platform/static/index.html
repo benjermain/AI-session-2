@@ -1,0 +1,381 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Vellora Bio — Autonomous Agent & State Graph Platform</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/css/styles.css">
+</head>
+<body>
+    <div class="app-container">
+        <!-- Top Navbar -->
+        <header class="top-navbar">
+            <div class="brand-logo">
+                <span class="logo-icon">🧬</span>
+                <span>VELLORA BIO</span>
+                <span class="brand-tag">AGENTIC PLATFORM v2.0</span>
+            </div>
+
+            <!-- Navigation Tabs -->
+            <nav class="nav-tabs">
+                <button class="nav-tab active" data-tab="tab-chat">
+                    <span>💬</span> Chat Hub
+                </button>
+                <button class="nav-tab" data-tab="tab-tools">
+                    <span>⚙️</span> MCP Tool Matrix
+                </button>
+                <button class="nav-tab" data-tab="tab-rag">
+                    <span>📚</span> RAG Knowledge Base
+                </button>
+                <button class="nav-tab" data-tab="tab-hitl">
+                    <span>⚠️</span> HITL Approvals <span id="badge-hitl" class="tab-badge amber" style="display:none;">0</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-tickets">
+                    <span>🎫</span> Failure Tickets <span id="badge-tickets" class="tab-badge" style="display:none;">0</span>
+                </button>
+                <button class="nav-tab" data-tab="tab-checkpoints">
+                    <span>🕒</span> Checkpoints
+                </button>
+            </nav>
+
+            <!-- Header Actions -->
+            <div class="header-actions">
+                <button id="btn-open-gemini-modal" class="btn-secondary" style="background:rgba(0,229,255,0.1); border-color:var(--cyan); color:var(--cyan); font-weight:600;">
+                    <span id="gemini-status-icon">⚡</span> <span id="gemini-status-text">Gemini API Key</span>
+                </button>
+                <div class="status-pill">
+                    <span class="status-dot"></span>
+                    <span>MCP RUNTIME: ONLINE</span>
+                </div>
+                <button id="btn-toggle-memory" class="btn-secondary">
+                    <span>🧠</span> Memory Dashboard
+                </button>
+            </div>
+        </header>
+
+        <!-- Main Content Area -->
+        <main class="main-content">
+            <!-- TAB 1: User Multi-Agent Chat Hub -->
+            <section id="tab-chat" class="tab-panel active">
+                <div class="chat-hub-layout">
+                    <!-- Agent Selector Panel -->
+                    <aside class="agent-selector-panel">
+                        <div class="panel-header">
+                            <span class="panel-title">Active AI Agents</span>
+                            <span class="brand-tag">5 Live</span>
+                        </div>
+                        <div id="agent-cards-container" class="agent-cards-list">
+                            <!-- Populated dynamically by chat.js -->
+                        </div>
+                    </aside>
+
+                    <!-- Chat & Execution Window -->
+                    <section class="chat-window">
+                        <div class="chat-header">
+                            <div class="chat-header-info">
+                                <span id="current-agent-icon" style="font-size:1.3rem;">🧬</span>
+                                <div>
+                                    <div id="current-agent-name" style="font-weight:700; font-size:1rem;">Bioreactor Batch Synthesis Agent</div>
+                                    <div id="current-agent-techniques" style="font-size:0.75rem; color:var(--text-muted);">Task Decomposition • Hybrid RAG • Checkpointing</div>
+                                </div>
+                            </div>
+                            <button id="btn-clear-chat" class="btn-secondary" style="font-size:0.75rem;">
+                                Clear Thread
+                            </button>
+                        </div>
+
+                        <!-- Messages & State Timeline Container -->
+                        <div id="chat-messages-container" class="chat-messages">
+                            <div class="message-card assistant">
+                                <div class="message-bubble">
+                                    Welcome to the <strong>Vellora Bio Autonomous Platform</strong>. Select an agent from the left panel to execute multi-stage bioreactor synthesis, run dual-use biosafety triage, explore off-target redesign mutations, or query our grounded biosafety memory engine.
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Input Controls Bar -->
+                        <div class="chat-input-bar">
+                            <div class="chat-params-bar">
+                                <span>Target Parameters:</span>
+                                <label>
+                                    Researcher:
+                                    <select id="select-researcher" class="chat-param-select">
+                                        <option value="1">Dr. Alice Vance (BSL-1)</option>
+                                        <option value="2">Dr. Bob Smith (BSL-2)</option>
+                                        <option value="3">Dr. Clara Oswald (BSL-3)</option>
+                                        <option value="4" selected>Dr. David Banner (BSL-4)</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    Payload:
+                                    <select id="select-payload" class="chat-param-select">
+                                        <option value="1" selected>#1: GFP Marker (Tier 1)</option>
+                                        <option value="2">#2: CRISPR Target (Tier 2)</option>
+                                        <option value="3">#3: Viral Vector (Tier 3)</option>
+                                        <option value="4">#4: High Risk Toxin (Tier 4)</option>
+                                    </select>
+                                </label>
+                                <label>
+                                    Sequence:
+                                    <input id="input-sequence" type="text" value="ATCGATCGATCG" class="chat-param-select" style="width:130px; font-family:'JetBrains Mono';">
+                                </label>
+                            </div>
+
+                            <div class="chat-input-controls">
+                                <input id="chat-prompt-input" type="text" placeholder="Enter instructions or query for the active agent..." class="chat-input-field">
+                                <button id="btn-send-message" class="btn-send">
+                                    <span>Execute</span> <span>⚡</span>
+                                </button>
+                            </div>
+                        </div>
+                    </section>
+                </div>
+            </section>
+
+            <!-- TAB 2: Dynamic MCP Tool Matrix (Admin) -->
+            <section id="tab-tools" class="tab-panel">
+                <div class="admin-card-container">
+                    <div class="admin-header-card">
+                        <div>
+                            <h2 class="admin-section-title">Dynamic MCP Tool Permission Matrix</h2>
+                            <p class="admin-section-desc">Manage runtime tool capabilities scoped to each agent on the live MCP server. Toggles take effect immediately without server restarts.</p>
+                        </div>
+                        <button id="btn-register-tool-modal" class="btn-secondary" style="background:rgba(0,229,255,0.1); border-color:var(--cyan); color:var(--cyan);">
+                            + Register New MCP Tool
+                        </button>
+                    </div>
+
+                    <div class="data-table-card">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Registered Tool</th>
+                                    <th>Description</th>
+                                    <th>Bioreactor Batch (SG1)</th>
+                                    <th>Biosafety (SG2)</th>
+                                    <th>Vector Redesign (SG3)</th>
+                                    <th>Memory / RAG</th>
+                                    <th>Decomposition</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tool-matrix-tbody">
+                                <!-- Populated dynamically by admin_tools.js -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 3: RAG Knowledge Base Manager (Admin) -->
+            <section id="tab-rag" class="tab-panel">
+                <div class="admin-card-container">
+                    <div class="admin-header-card">
+                        <div>
+                            <h2 class="admin-section-title">RAG Knowledge Base & Policy Documents</h2>
+                            <p class="admin-section-desc">Add or remove clinical biosafety manuals and protocols. Changes are indexed live into ChromaDB / BM25 stores for immediate agent retrieval.</p>
+                        </div>
+                        <button id="btn-add-rag-modal" class="btn-secondary" style="background:rgba(16,185,129,0.1); border-color:var(--emerald); color:var(--emerald);">
+                            + Ingest New Policy Document
+                        </button>
+                    </div>
+
+                    <!-- Search Test Sandbox -->
+                    <div class="data-table-card" style="padding:1.25rem;">
+                        <h3 style="font-size:0.95rem; margin-bottom:0.75rem; color:var(--text-secondary);">Test Hybrid Retrieval (Vector + BM25)</h3>
+                        <div style="display:flex; gap:0.75rem;">
+                            <input id="input-rag-test-query" type="text" placeholder="e.g. Protocol 4.2b BSL-3 containment..." class="chat-input-field">
+                            <button id="btn-rag-test-search" class="btn-secondary">Test Search</button>
+                        </div>
+                        <div id="rag-test-results" style="margin-top:0.75rem; font-size:0.85rem; color:var(--cyan);"></div>
+                    </div>
+
+                    <div class="data-table-card">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Doc ID</th>
+                                    <th>Policy Text / Protocol Snippet</th>
+                                    <th>Source</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="rag-docs-tbody">
+                                <!-- Populated dynamically by admin_rag.js -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 4: HITL Approvals (Admin) -->
+            <section id="tab-hitl" class="tab-panel">
+                <div class="admin-card-container">
+                    <div class="admin-header-card">
+                        <div>
+                            <h2 class="admin-section-title">Human-in-the-Loop (HITL) Escalation Center</h2>
+                            <p class="admin-section-desc">Review pending state-graph pauses for high-risk protocols, dual-use evaluations, and technician sterility sign-offs. Resuming picks up the admin's decision.</p>
+                        </div>
+                        <button id="btn-refresh-hitl" class="btn-secondary">Refresh Queue</button>
+                    </div>
+
+                    <div id="hitl-tasks-container" style="display:flex; flex-direction:column; gap:1rem;">
+                        <!-- Populated dynamically by admin_hitl.js -->
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 5: Failure Tickets Center (Admin) -->
+            <section id="tab-tickets" class="tab-panel">
+                <div class="admin-card-container">
+                    <div class="admin-header-card">
+                        <div>
+                            <h2 class="admin-section-title">Failure Ticket Recovery & Resolution Center</h2>
+                            <p class="admin-section-desc">Inspect unplanned mid-node exceptions, view exact serialized state at moment of failure, edit parameters, and resume the graph from its checkpoint.</p>
+                        </div>
+                        <button id="btn-refresh-tickets" class="btn-secondary">Refresh Tickets</button>
+                    </div>
+
+                    <div class="data-table-card">
+                        <table class="data-table">
+                            <thead>
+                                <tr>
+                                    <th>Ticket ID</th>
+                                    <th>Workflow</th>
+                                    <th>Failed Node</th>
+                                    <th>Error Reason</th>
+                                    <th>Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody id="tickets-tbody">
+                                <!-- Populated dynamically by admin_tickets.js -->
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </section>
+
+            <!-- TAB 6: Checkpoints Explorer -->
+            <section id="tab-checkpoints" class="tab-panel">
+                <div class="admin-card-container">
+                    <div class="admin-header-card">
+                        <div>
+                            <h2 class="admin-section-title">State Checkpoint Timeline Explorer</h2>
+                            <p class="admin-section-desc">Audit durable SQLite state snapshots recorded after every node transition across state graph workflows.</p>
+                        </div>
+                    </div>
+
+                    <div class="data-table-card" style="padding:1.25rem;">
+                        <div style="display:flex; gap:0.75rem; align-items:center; margin-bottom:1rem;">
+                            <label style="font-size:0.85rem; color:var(--text-secondary);">Enter Thread ID:</label>
+                            <input id="input-checkpoint-thread" type="text" placeholder="e.g. thread-batch-001" class="chat-input-field" style="max-width:300px;">
+                            <button id="btn-fetch-checkpoints" class="btn-secondary">Fetch Timeline</button>
+                        </div>
+                        <div id="checkpoint-timeline-container">
+                            <p style="font-size:0.85rem; color:var(--text-muted);">Enter a workflow Thread ID or run a chat session to inspect checkpoint history.</p>
+                        </div>
+                    </div>
+                </div>
+            </section>
+        </main>
+    </div>
+
+    <!-- Modals & Drawers -->
+
+    <!-- Memory Dashboard Slide-out Drawer -->
+    <div id="memory-drawer" class="modal-overlay">
+        <div class="modal-content" style="max-width:750px;">
+            <div class="modal-header">
+                <h3 class="modal-title">🧠 Long-Term Memory & Scratchpad Telemetry</h3>
+                <button class="btn-close-modal btn-secondary" style="padding:0.2rem 0.6rem;">✕</button>
+            </div>
+            <div id="memory-drawer-body" class="modal-body">
+                <!-- Populated dynamically -->
+            </div>
+        </div>
+    </div>
+
+    <!-- HITL Decision Modal -->
+    <div id="modal-hitl-decision" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Resolve HITL Escalation Task</h3>
+                <button class="btn-close-modal btn-secondary" style="padding:0.2rem 0.6rem;">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="hitl-modal-details"></div>
+                <div style="margin-top:1rem;">
+                    <label style="font-size:0.8rem; color:var(--text-secondary); display:block; margin-bottom:0.4rem;">State JSON Snapshot:</label>
+                    <pre id="hitl-modal-state" style="background:#000; padding:0.75rem; border-radius:6px; font-size:0.75rem; color:#A5F3FC; max-height:200px; overflow:auto;"></pre>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-hitl-reject" class="btn-secondary" style="color:var(--crimson); border-color:var(--crimson);">Reject & Abort</button>
+                <button id="btn-hitl-approve" class="btn-send" style="background:var(--emerald); color:#000;">Approve & Resume</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Ticket Resolve Modal -->
+    <div id="modal-ticket-resolve" class="modal-overlay">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Resolve Failure Ticket & Resume Execution</h3>
+                <button class="btn-close-modal btn-secondary" style="padding:0.2rem 0.6rem;">✕</button>
+            </div>
+            <div class="modal-body">
+                <div id="ticket-modal-details"></div>
+                <div style="margin-top:0.75rem;">
+                    <label style="font-size:0.8rem; color:var(--text-secondary); display:block; margin-bottom:0.4rem;">Edit State Parameters Before Resumption:</label>
+                    <textarea id="ticket-modal-state-editor" rows="8" class="chat-input-field" style="width:100%; font-family:'JetBrains Mono'; font-size:0.8rem;"></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-close-modal btn-secondary">Cancel</button>
+                <button id="btn-ticket-resume-submit" class="btn-send">Resolve & Resume</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Gemini API Key Configuration Modal -->
+    <div id="modal-gemini-key" class="modal-overlay">
+        <div class="modal-content" style="max-width:550px;">
+            <div class="modal-header">
+                <h3 class="modal-title">⚡ Connect Google Gemini API Key</h3>
+                <button class="btn-close-modal btn-secondary" style="padding:0.2rem 0.6rem;">✕</button>
+            </div>
+            <div class="modal-body">
+                <p style="font-size:0.85rem; color:var(--text-secondary); line-height:1.5;">
+                    Connecting a <strong>Gemini API Key</strong> enables real-time LLM conversational reasoning (using <code>gemini-2.5-flash</code>) across all 5 specialized agents.
+                </p>
+                <div style="margin-top:0.75rem;">
+                    <label style="font-size:0.8rem; color:var(--text-secondary); display:block; margin-bottom:0.4rem;">Google Gemini API Key:</label>
+                    <input id="input-gemini-api-key" type="password" placeholder="AIzaSy..." class="chat-input-field" style="width:100%; font-family:'JetBrains Mono';">
+                </div>
+                <div id="gemini-modal-status" style="font-size:0.8rem; color:var(--text-muted); margin-top:0.5rem;">
+                    Current Status: <span id="gemini-current-status-text">Checking...</span>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-close-modal btn-secondary">Cancel</button>
+                <button id="btn-save-gemini-key" class="btn-send">Save & Activate</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Toast Notification Container -->
+    <div id="toast-container" class="toast-container"></div>
+
+    <!-- JavaScript Scripts -->
+    <script src="/static/js/app.js"></script>
+    <script src="/static/js/chat.js"></script>
+    <script src="/static/js/admin_tools.js"></script>
+    <script src="/static/js/admin_rag.js"></script>
+    <script src="/static/js/admin_hitl.js"></script>
+    <script src="/static/js/admin_tickets.js"></script>
+    <script src="/static/js/checkpoints.js"></script>
+</body>
+</html>

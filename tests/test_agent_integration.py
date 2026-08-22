@@ -114,5 +114,43 @@ class TestAgentIntegration(unittest.TestCase):
         self.assertEqual(agent_msgs, direct_msgs)
 
 
+    def test_direct_context_strategy_methods_on_agent(self):
+        """Verify agent's direct strategy helper methods invoke context_eval functions."""
+        for i in range(8):
+            self.agent.record_turn("user", f"Turn {i}")
+            self.agent.record_turn("tool", f'{{"output": {i}}}', metadata={"is_tool_output": True})
+
+        slid = self.agent.slide_context_window(last_k=4)
+        self.assertIsInstance(slid, list)
+
+        masked = self.agent.mask_tool_observations(keep_last_tool_outputs=2)
+        self.assertIsInstance(masked, list)
+
+        summed = self.agent.summarize_context_history(chunk_size=4)
+        self.assertIsInstance(summed, list)
+
+        pruned = self.agent.prune_context_zones()
+        self.assertIsInstance(pruned, list)
+
+    def test_planning_and_grounded_refine_on_agent(self):
+        """Verify planning router and self-refine work via the Agent instance."""
+        route_res = self.agent.plan_and_route_task("Optimize codon sequence for vector payload #4")
+        self.assertEqual(route_res["algorithm"], "tree_of_thoughts")
+
+        draft = "Allocate Researcher ID=1 (BSL-1) to Risk Tier 4 (Dangerous) payload synthesis"
+        refine_res = self.agent.refine_plan_with_grounding(draft)
+        self.assertFalse(refine_res.feedback_before.success)
+        self.assertTrue(len(refine_res.critique) > 0)
+
+    def test_self_rag_verification_on_agent(self):
+        """Verify Self-RAG verification runs during policy grounding and citation checking."""
+        rag_res = self.agent.retrieve_policy_grounding("Protocol 4.2b cardiac screening")
+        self.assertTrue(rag_res.get("self_rag_verified"))
+
+        chunks = [{"text": "Vellora Biosafety Protocol 4.2b: All gene synthesis requests"}]
+        citations = self.agent.verify_rag_citations("According to Vellora Biosafety Protocol 4.2b, screening is required", chunks)
+        self.assertTrue(citations["ok"])
+
+
 if __name__ == "__main__":
     unittest.main()

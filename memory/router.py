@@ -19,6 +19,7 @@ import os
 import time
 from typing import Dict, List, Any, Optional
 from memory.episodic_store import EpisodicStore, Episode
+from memory.routing import decide_routing
 
 DB_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "memory_store.db"))
 LOG_PATH = os.path.abspath(os.path.join(os.path.dirname(__file__), "router_audit.log"))
@@ -85,8 +86,13 @@ class PromoteOrDropRouter:
         decision = "FORGET"
         reasoning = ""
 
-        # Check for high-value episodic triggers
-        if any(keyword in content_str.lower() for keyword in [
+        # 1. Run domain salience heuristics from memory.routing
+        heuristic_res = decide_routing({"text": content_str, "metadata": item.get("metadata", {})})
+        if heuristic_res.get("action") == "promote":
+            decision = "EPISODIC"
+            reasoning = f"Heuristic promotion ({heuristic_res.get('reason')}): Critical domain event or safety keyword."
+        # 2. Check for high-value episodic triggers
+        elif any(keyword in content_str.lower() for keyword in [
             "submit_synthesis_job", "simulate_off_target_effects", "approved", "rejected",
             "bsl", "clearance", "payload", "sequence", "risk tier", "allergy", "protocol",
             "mutation", "toxicity", "safety_simulation"

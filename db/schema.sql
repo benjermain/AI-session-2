@@ -66,3 +66,13 @@ CREATE TABLE failure_tickets (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     resolved_at TIMESTAMP
 );
+
+CREATE TABLE state_checkpoints (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    thread_id TEXT NOT NULL,
+    workflow TEXT NOT NULL,
+    node TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    step_index INTEGER NOT NULL,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);

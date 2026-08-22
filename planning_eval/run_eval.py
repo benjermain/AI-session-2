@@ -256,3 +256,51 @@ class BenchmarkRunner:
             "benchmark_table": self.save_benchmark_table(),
         }
         return artifacts
+
+
+def run_benchmark():
+    from planning.grounded_environment import GroundedEnvironment
+    from planning.lats import lats
+    from planning.llm_adapter import LLMAdapter
+    from planning.reflexion import reflexion
+    from planning.self_refine import self_refine
+
+    env = GroundedEnvironment()
+
+    def execute_lats(test_case: dict) -> tuple[bool, float, Any, float]:
+        llm = LLMAdapter(mock_mode=True)
+        start = time.time()
+        res = lats(test_case["task"], llm, env, iterations=2, n_actions=2)
+        latency = time.time() - start
+        return res.success, res.best_score, llm.metrics, latency
+
+    def execute_self_refine(test_case: dict) -> tuple[bool, float, Any, float]:
+        llm = LLMAdapter(mock_mode=True)
+        start = time.time()
+        init_fb = env.evaluate(test_case["task"])
+        res = self_refine(test_case["task"], init_fb, llm, env, max_iterations=1)
+        latency = time.time() - start
+        score = res.feedback_after.score
+        return res.feedback_after.success, score, llm.metrics, latency
+
+    def execute_reflexion(test_case: dict) -> tuple[bool, float, Any, float]:
+        llm = LLMAdapter(mock_mode=True)
+        start = time.time()
+        res = reflexion(test_case["task"], llm, env, max_trials=3, memory_size=3)
+        latency = time.time() - start
+        fb = env.evaluate(res.output)
+        return res.success, fb.score, llm.metrics, latency
+
+    executors = {
+        "LATS (Grounded)": execute_lats,
+        "Self-Refine": execute_self_refine,
+        "Reflexion (3-trial)": execute_reflexion,
+    }
+
+    runner = BenchmarkRunner()
+    artifacts = runner.run_and_export(executors)
+    print("Benchmark complete. Produced artifacts:", artifacts)
+
+
+if __name__ == "__main__":
+    run_benchmark()

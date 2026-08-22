@@ -20,6 +20,12 @@ def get_db_connection():
             state_json TEXT NOT NULL, status TEXT NOT NULL,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP, resolved_at TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS state_checkpoints (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            thread_id TEXT NOT NULL, workflow TEXT NOT NULL, node TEXT NOT NULL,
+            state_json TEXT NOT NULL, step_index INTEGER NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
     """)
     return conn
 
@@ -99,6 +105,48 @@ def close_failure_ticket(ticket_id: str) -> None:
         if conn.execute("UPDATE failure_tickets SET status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP WHERE id = ?", (ticket_id,)).rowcount == 0:
             raise KeyError(f"Failure ticket '{ticket_id}' not found")
         conn.commit()
+
+
+def insert_state_checkpoint(thread_id: str, workflow: str, node: str, state: dict[str, Any], step_index: int) -> int:
+    import json
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO state_checkpoints (thread_id, workflow, node, state_json, step_index) VALUES (?, ?, ?, ?, ?)",
+            (thread_id, workflow, node, json.dumps(state), step_index),
+        )
+        conn.commit()
+        return cursor.lastrowid
+
+
+def get_latest_checkpoint(thread_id: str) -> Optional[dict[str, Any]]:
+    import json
+    with get_db_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM state_checkpoints WHERE thread_id = ? ORDER BY step_index DESC, id DESC LIMIT 1",
+            (thread_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    result = dict(row)
+    result["state"] = json.loads(result.pop("state_json"))
+    return result
+
+
+def list_checkpoints(thread_id: str) -> list[dict[str, Any]]:
+    import json
+    with get_db_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM state_checkpoints WHERE thread_id = ? ORDER BY step_index ASC, id ASC",
+            (thread_id,),
+        ).fetchall()
+    results = []
+    for r in rows:
+        item = dict(r)
+        item["state"] = json.loads(item.pop("state_json"))
+        results.append(item)
+    return results
+
 
 def record_safety_simulation(payload_id: int, off_target_score: float, status: str, details: str):
     with get_db_connection() as conn:
