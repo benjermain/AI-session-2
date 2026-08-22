@@ -153,7 +153,50 @@ class ShortTermMemory:
             "max_buffer_size": self.max_buffer_size,
         }
 
+    def build_llm_messages(
+        self,
+        system_prompt: str = "You are Vellora Bio Agent, a safe biological engineering assistant.",
+        strategy_name: str = "observation_masking",
+        **kwargs
+    ) -> List[tuple[str, str]]:
+        """
+        Constructs a 4-zone structured prompt sequence for LLM / Reasoning consumption:
+        Zone 1: System prompt
+        Zone 2: Working Scratchpad & RAG Grounded Safety Constraints
+        Zone 3: Context-Managed Dialogue Transcript & Masked Tool Outputs (via apply_context_strategy)
+        Zone 4: Active human turn
+        """
+        managed_info = self.get_managed_context(strategy_name=strategy_name, **kwargs)
+        managed_transcript = managed_info["active_transcript"]
+
+        sp = self.scratchpad.to_dict()
+        constraints_str = "\n".join(f"  - {c}" for c in sp.get("safety_constraints", [])) or "  - Standard BSL safety rules"
+        sp_block = (
+            f"\n\n[WORKING SCRATCHPAD & BIOSAFETY CONSTRAINTS]\n"
+            f"Current Plan: {sp.get('current_plan')}\n"
+            f"Active Subgoal: {sp.get('active_subgoal')}\n"
+            f"Working Variables: {sp.get('working_variables')}\n"
+            f"Safety Constraints:\n{constraints_str}"
+        )
+
+        messages = [
+            ("system", f"{system_prompt}{sp_block}")
+        ]
+
+        for turn in managed_transcript:
+            role = turn.get("role", "user")
+            content = str(turn.get("content", turn.get("text", "")))
+            if role == "tool":
+                messages.append(("tool", content))
+            elif role in ["assistant", "agent"]:
+                messages.append(("assistant", content))
+            else:
+                messages.append(("human", content))
+
+        return messages
+
     def clear_buffer(self):
         """Clears transcript buffer without resetting scratchpad."""
         self.buffer.clear()
+
 

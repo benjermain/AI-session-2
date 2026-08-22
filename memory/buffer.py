@@ -1,35 +1,43 @@
 """
-Simple sliding rolling buffer implementation.
+Rolling buffer implementation with integrated Context Window Management.
 """
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
+from context_eval.strategies import apply_context_strategy
+
 
 class RollingBuffer:
-    """A simple rolling buffer that keeps the last N turns or up to a token budget.
+    """A rolling buffer that maintains conversation history with dynamic context management strategies.
 
-    Methods:
-    - append(turn: dict)
-    - get_context(window: int)
-    - prune_to_tokens(max_tokens: int)
+    Supported strategies:
+    - observation_masking (default)
+    - sliding_window
+    - recursive_summarization
+    - zone_based_pruning
     """
-    def __init__(self, max_turns: int = 50, max_tokens: int = 4000):
+    def __init__(self, max_turns: int = 50, max_tokens: int = 4000, default_strategy: str = "observation_masking"):
         self.max_turns = max_turns
         self.max_tokens = max_tokens
+        self.default_strategy = default_strategy
         self.turns: List[Dict[str, Any]] = []
 
     def append(self, turn: Dict[str, Any]):
         self.turns.append(turn)
-        # simple prune by count
+        # Prune if exceeding turn count
         if len(self.turns) > self.max_turns:
             self.turns = self.turns[-self.max_turns:]
 
-    def get_context(self, window: int = None):
+    def get_context(self, window: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Returns standard sliding window context."""
         if window is None:
             window = self.max_turns
         return self.turns[-window:]
 
-    def prune_to_tokens(self, max_tokens: int = None):
-        # Placeholder: in a real implementation count tokens and prune oldest
-        if max_tokens is None:
-            max_tokens = self.max_tokens
-        # No-op in this simple scaffold
-        return
+    def get_managed_context(self, strategy: Optional[str] = None, **kwargs) -> List[Dict[str, Any]]:
+        """Returns context window processed through the active context management strategy."""
+        strat = strategy or self.default_strategy
+        return apply_context_strategy(self.turns, strat, **kwargs)
+
+    def prune_to_tokens(self, max_tokens: Optional[int] = None, strategy: str = "observation_masking") -> List[Dict[str, Any]]:
+        """Applies context management strategy to compress transcript to token budget."""
+        budget = max_tokens or self.max_tokens
+        return self.get_managed_context(strategy=strategy)

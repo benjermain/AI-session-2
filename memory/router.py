@@ -115,9 +115,10 @@ class PromoteOrDropRouter:
         # If EPISODIC, promote ONLY to Episodic Store (NEVER directly to Semantic Store!)
         if decision == "EPISODIC":
             event_type = "tool_call" if role == "tool" else "dialogue_turn"
+            safe_researcher_id = researcher_id if researcher_id is not None else item.get("metadata", {}).get("researcher_id", 1)
             self.episodic_store.add_episode(
                 session_id=session_id,
-                researcher_id=researcher_id,
+                researcher_id=safe_researcher_id,
                 event_type=event_type,
                 summary=summary,
                 raw_content=item,
