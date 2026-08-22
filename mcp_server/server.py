@@ -1,5 +1,8 @@
 import sys
 import os
+import asyncio
+import inspect
+import importlib
 from types import SimpleNamespace
 from typing import Dict, Any
 
@@ -29,6 +32,7 @@ except ImportError:  # pragma: no cover - exercised in minimal test environments
 
 from mcp_server.tools.defensive_synthesis import handle_submit_synthesis_job
 from mcp_server.tools.progress_off_target import handle_simulate_off_target_effects
+from mcp_server.registry import registry
 
 mcp = FastMCP("Vellora Biosafety Server")
 
@@ -67,14 +71,25 @@ async def simulate_off_target_effects(
         payload_id: Unique integer identifier of the target genetic payload.
         sequence: Genetic target sequence to evaluate for off-target binding risks.
     """
-    def on_progress(current: int, total: int, message: str):
-        ctx.info(f"[{current}/{total}] {message}")
+    progress_events = []
 
-    return handle_simulate_off_target_effects(
+    def on_progress(current: int, total: int, message: str):
+        progress_events.append(f"[{current}/{total}] {message}")
+
+    result = await asyncio.to_thread(handle_simulate_off_target_effects,
         payload_id=payload_id,
         sequence=sequence,
         progress_callback=on_progress
     )
+    for message in progress_events:
+        notification = ctx.info(message)
+        if inspect.isawaitable(notification):
+            await notification
+    return result
+
+
+registry.register("submit_synthesis_job", submit_synthesis_job, "Submit a validated synthesis job")
+registry.register("simulate_off_target_effects", simulate_off_target_effects, "Run an off-target safety simulation")
 
 if __name__ == "__main__":
     import argparse
@@ -105,6 +120,33 @@ def process_mcp_protocol_request(request_payload: str) -> str:
         payload = json.loads(request_payload)
         method = payload.get("method")
         params = payload.get("params", {})
+        agent_id = params.get("agent_id")
+
+        if method == "mcp/tools/list":
+            return json.dumps({"jsonrpc": "2.0", "result": {"tools": registry.list(agent_id)}, "id": payload.get("id", 1)})
+        if method == "mcp/tools/register":
+            name = params["name"]
+            handler = params.get("handler")
+            if handler is None and params.get("handler_path"):
+                module_name, separator, attribute_name = params["handler_path"].rpartition(":")
+                if not separator:
+                    module_name, _, attribute_name = params["handler_path"].rpartition(".")
+                if not module_name or not attribute_name:
+                    raise ValueError("handler_path must use module:attribute notation")
+                handler = getattr(importlib.import_module(module_name), attribute_name)
+            if not callable(handler):
+                raise ValueError("Runtime registration requires a callable handler or handler_path")
+            registry.register(name, handler, params.get("description", ""), params.get("agents"), replace=params.get("replace", False))
+            return json.dumps({"jsonrpc": "2.0", "result": {"registered": name}, "id": payload.get("id", 1)})
+        if method == "mcp/tools/deregister":
+            name = params["name"]
+            return json.dumps({"jsonrpc": "2.0", "result": {"deregistered": registry.deregister(name)}, "id": payload.get("id", 1)})
+        if method == "mcp/tools/call":
+            registration = registry.get(params["name"], agent_id)
+            result = registration.handler(**params.get("arguments", {}))
+            if inspect.isawaitable(result):
+                raise ValueError("Async tool calls must use the MCP transport")
+            return json.dumps({"jsonrpc": "2.0", "result": result, "id": payload.get("id", 1)})
         
         if method == "mcp/rag/query":
             return json.dumps({
