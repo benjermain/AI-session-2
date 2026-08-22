@@ -122,9 +122,22 @@ const AdminHITL = {
 
             const data = await res.json();
             if (res.ok) {
-                App.showToast(`Task ${this.selectedTaskId} resolved as ${data.decision}! Underlying workflow resumed.`, 'success');
+                App.showToast(`Task ${this.selectedTaskId} resolved as ${data.decision}! Workflow resumed.`, 'success');
                 modal.classList.remove('active');
                 this.fetchTasks();
+
+                // Append the resumed completion result into Chat window
+                if (window.Chat && data.resumed_result) {
+                    Chat.appendAssistantResult({
+                        summary: data.summary || `Workflow resumed after ${data.decision.toLowerCase()} sign-off.`,
+                        steps: data.steps || [],
+                        status: data.resumed_result.status || 'COMPLETED',
+                        data: data.resumed_result,
+                    });
+                }
+
+                // Switch back to Chat tab so the user sees the live harvest/result
+                App.switchTab('tab-chat');
             } else {
                 App.showToast(`Resolution error: ${data.detail}`, 'error');
             }

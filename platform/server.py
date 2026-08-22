@@ -310,10 +310,36 @@ def resolve_hitl_endpoint(req: HITLResolveRequest):
         else:
             resolve_hitl_task(req.task_id, decision, req.modified_state)
 
+        # Generate rich conversational summary and step visualization for the resumed outcome
+        summary = None
+        steps = []
+        if resumed_result:
+            status = resumed_result.get("status", "COMPLETED")
+            if workflow_name == "bioreactor_batch":
+                steps = [
+                    {"name": f"Technician Sign-Off: {decision}", "status": "COMPLETED"},
+                    {"name": "Harvest & Purification", "status": status if status != "ABORTED" else "FAILED"},
+                ]
+            elif workflow_name == "biosafety_escalation":
+                steps = [
+                    {"name": f"IBC Review Gate: {decision}", "status": "COMPLETED"},
+                    {"name": "Downstream Lab Release", "status": status if status != "ABORTED" else "FAILED"},
+                ]
+
+            summary = llm_client.generate_agent_response(
+                agent_id=workflow_name,
+                user_message=f"Resume workflow after human {decision.lower()}",
+                execution_data=resumed_result,
+                scratchpad=dispatcher.scratchpad.to_dict(),
+            )
+
         return {
             "status": "RESOLVED",
             "decision": decision,
             "task_id": req.task_id,
+            "workflow": workflow_name,
+            "summary": summary,
+            "steps": steps,
             "resumed_result": resumed_result,
         }
     except Exception as e:
@@ -360,10 +386,24 @@ def resolve_ticket_endpoint(req: TicketResolveRequest):
             conn.execute("UPDATE failure_tickets SET status = 'RESOLVED', resolved_at = CURRENT_TIMESTAMP WHERE id = ?", (req.ticket_id,))
             conn.commit()
 
+        summary = llm_client.generate_agent_response(
+            agent_id=workflow_name,
+            user_message="Workflow resumed from failure ticket checkpoint",
+            execution_data=resumed_result,
+            scratchpad=dispatcher.scratchpad.to_dict(),
+        )
+
+        steps = [
+            {"name": f"Failure Ticket {req.ticket_id[:8]}... Resolved", "status": "COMPLETED"},
+            {"name": "Resumed Execution from Checkpoint", "status": "COMPLETED"},
+        ]
+
         return {
             "status": "RESOLVED",
             "ticket_id": req.ticket_id,
             "workflow": workflow_name,
+            "summary": summary,
+            "steps": steps,
             "resumed_result": resumed_result,
         }
     except Exception as e:

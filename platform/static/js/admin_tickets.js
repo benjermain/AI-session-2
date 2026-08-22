@@ -115,6 +115,19 @@ const AdminTickets = {
                 App.showToast(`Ticket resolved! Workflow '${data.workflow}' resumed from checkpoint.`, 'success');
                 modal.classList.remove('active');
                 this.fetchTickets();
+
+                // Append the resumed completion result into Chat window
+                if (window.Chat && data.resumed_result) {
+                    Chat.appendAssistantResult({
+                        summary: data.summary || `Workflow resumed after resolving failure ticket.`,
+                        steps: data.steps || [],
+                        status: data.resumed_result.status || 'COMPLETED',
+                        data: data.resumed_result,
+                    });
+                }
+
+                // Switch back to Chat tab
+                App.switchTab('tab-chat');
             } else {
                 App.showToast(`Resume error: ${data.detail}`, 'error');
             }

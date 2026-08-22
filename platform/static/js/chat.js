@@ -202,14 +202,19 @@ const Chat = {
         let bannerHtml = '';
         if (data.status === 'PAUSED') {
             bannerHtml = `
-                <div style="background:rgba(245,158,11,0.12); border:1px solid var(--amber); border-radius:8px; padding:0.75rem 1rem; margin-top:0.75rem; display:flex; justify-content:space-between; align-items:center;">
+                <div class="hitl-chat-banner" style="background:rgba(245,158,11,0.12); border:1px solid var(--amber); border-radius:8px; padding:0.75rem 1rem; margin-top:0.75rem; display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:0.5rem;">
                     <div>
                         <strong style="color:var(--amber);">⚠️ HITL Approval Required</strong>
                         <p style="font-size:0.75rem; color:var(--text-secondary); margin-top:0.2rem;">Task ID: <code>${data.task_id}</code></p>
                     </div>
-                    <button class="btn-secondary" style="background:var(--amber); color:#000; font-weight:700; font-size:0.75rem;" onclick="App.switchTab('tab-hitl')">
-                        Review in HITL Tab →
-                    </button>
+                    <div style="display:flex; gap:0.5rem;">
+                        <button class="btn-secondary" style="font-size:0.75rem; padding:0.35rem 0.75rem;" onclick="App.switchTab('tab-hitl')">
+                            Inspect State →
+                        </button>
+                        <button class="btn-send" style="background:var(--emerald); color:#000; font-weight:700; font-size:0.75rem; padding:0.35rem 0.85rem;" onclick="Chat.quickApproveTask('${data.task_id}', this)">
+                            Approve & Resume ✓
+                        </button>
+                    </div>
                 </div>
             `;
         } else if (data.status === 'FAILED') {
@@ -250,7 +255,55 @@ const Chat = {
 
         container.appendChild(card);
         container.scrollTop = container.scrollHeight;
+    },
+
+    async quickApproveTask(taskId, btnEl) {
+        if (!taskId) return;
+        if (btnEl) {
+            btnEl.disabled = true;
+            btnEl.textContent = 'Resuming...';
+        }
+
+        try {
+            const res = await fetch('/api/admin/hitl/resolve', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ task_id: taskId, approved: true })
+            });
+
+            const data = await res.json();
+            if (res.ok) {
+                App.showToast(`Task ${taskId} approved! Workflow resumed.`, 'success');
+                if (btnEl) {
+                    const banner = btnEl.closest('.hitl-chat-banner');
+                    if (banner) {
+                        banner.innerHTML = `<span style="color:var(--emerald); font-size:0.8rem; font-weight:600;">✓ Approved & Resumed (Task: ${taskId})</span>`;
+                    }
+                }
+                if (data.resumed_result) {
+                    this.appendAssistantResult({
+                        summary: data.summary || `Workflow resumed and harvest completed.`,
+                        steps: data.steps || [],
+                        status: data.resumed_result.status || 'COMPLETED',
+                        data: data.resumed_result,
+                    });
+                }
+            } else {
+                App.showToast(`Error: ${data.detail}`, 'error');
+                if (btnEl) {
+                    btnEl.disabled = false;
+                    btnEl.textContent = 'Approve & Resume ✓';
+                }
+            }
+        } catch (e) {
+            App.showToast(`Network error: ${e.message}`, 'error');
+            if (btnEl) {
+                btnEl.disabled = false;
+                btnEl.textContent = 'Approve & Resume ✓';
+            }
+        }
     }
 };
 
+window.Chat = Chat;
 window.addEventListener('DOMContentLoaded', () => Chat.init());
