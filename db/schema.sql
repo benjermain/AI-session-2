@@ -1,4 +1,6 @@
 DROP TABLE IF EXISTS safety_simulations;
+DROP TABLE IF EXISTS failure_tickets;
+DROP TABLE IF EXISTS hitl_tasks;
 DROP TABLE IF EXISTS synthesis_jobs;
 DROP TABLE IF EXISTS genetic_payloads;
 DROP TABLE IF EXISTS researchers;
@@ -41,4 +43,26 @@ CREATE TABLE safety_simulations (
     details TEXT,
     ran_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (payload_id) REFERENCES genetic_payloads(id)
+);
+
+CREATE TABLE hitl_tasks (
+    id TEXT PRIMARY KEY,
+    workflow TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('PENDING', 'APPROVED', 'REJECTED')),
+    requested_by TEXT,
+    decision TEXT,
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
+);
+
+CREATE TABLE failure_tickets (
+    id TEXT PRIMARY KEY,
+    workflow TEXT NOT NULL,
+    node TEXT,
+    error TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('OPEN', 'RESOLVED')),
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    resolved_at TIMESTAMP
 );
